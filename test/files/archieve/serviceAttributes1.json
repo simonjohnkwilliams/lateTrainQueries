@@ -1,0 +1,97 @@
+{
+  "serviceAttributesDetails": {
+    "date_of_service": "2019-11-01",
+    "toc_code": "SW",
+    "rid": "201911018730433",
+    "locations": [
+      {
+        "location": "PMH",
+        "gbtt_ptd": "0512",
+        "gbtt_pta": "",
+        "actual_td": "",
+        "actual_ta": "",
+        "late_canc_reason": "887"
+      },
+      {
+        "location": "PMS",
+        "gbtt_ptd": "0517",
+        "gbtt_pta": "0515",
+        "actual_td": "",
+        "actual_ta": "",
+        "late_canc_reason": "887"
+      },
+      {
+        "location": "FTN",
+        "gbtt_ptd": "0521",
+        "gbtt_pta": "0520",
+        "actual_td": "",
+        "actual_ta": "",
+        "late_canc_reason": "887"
+      },
+      {
+        "location": "HAV",
+        "gbtt_ptd": "0530",
+        "gbtt_pta": "0529",
+        "actual_td": "",
+        "actual_ta": "",
+        "late_canc_reason": "887"
+      },
+      {
+        "location": "PTR",
+        "gbtt_ptd": "0544",
+        "gbtt_pta": "0543",
+        "actual_td": "",
+        "actual_ta": "",
+        "late_canc_reason": "887"
+      },
+      {
+        "location": "HSL",
+        "gbtt_ptd": "0557",
+        "gbtt_pta": "0557",
+        "actual_td": "",
+        "actual_ta": "",
+        "late_canc_reason": "887"
+      },
+      {
+        "location": "GOD",
+        "gbtt_ptd": "0607",
+        "gbtt_pta": "0606",
+        "actual_td": "",
+        "actual_ta": "",
+        "late_canc_reason": "887"
+      },
+      {
+        "location": "GLD",
+        "gbtt_ptd": "0614",
+        "gbtt_pta": "0613",
+        "actual_td": "",
+        "actual_ta": "",
+        "late_canc_reason": "887"
+      },
+      {
+        "location": "WPL",
+        "gbtt_ptd": "0620",
+        "gbtt_pta": "0620",
+        "actual_td": "",
+        "actual_ta": "",
+        "late_canc_reason": "887"
+      },
+      {
+        "location": "WOK",
+        "gbtt_ptd": "0627",
+        "gbtt_pta": "0625",
+        "actual_td": "",
+        "actual_ta": "",
+        "late_canc_reason": "887"
+      },
+      {
+        "location": "WAT",
+        "gbtt_ptd": "",
+        "gbtt_pta": "0656",
+        "actual_td": "",
+        "actual_ta": "",
+        "late_canc_reason": "887"
+      }
+    ]
+  }
+}
