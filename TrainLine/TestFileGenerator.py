@@ -5,8 +5,8 @@ import json
 import os
 import fnmatch
 from requests.exceptions import HTTPError
-
-from TrainLine import LateObject
+#from TrainLine import LateObject
+from LateObject import LateObject
 
 DATE_FORMAT = "%Y-%m-%d"
 DAYS_BACK = 31
@@ -238,9 +238,11 @@ if __name__== "__main__":
         latestTrainList = []
         for dateList in lateTrainDictionary.values():
             #we now have a date for trains - sort through this and pullout the one with the latest time.
+            #need to sort this list by date.
             latestTrainList.append(getLatestTrainObject(dateList))
 
         #we now have a list of the lastest train objects they now need to be formatted correctly and send out
+        latestTrainList.sort(key=lambda x: x[0].date_of_service, reverse=True)
         writeLateTrainsToFile('outboundLateTrains',latestTrainList,'WAT')
 
     #generate from journey
