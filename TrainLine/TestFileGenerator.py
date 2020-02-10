@@ -10,10 +10,10 @@ from LateObject import LateObject
 
 DATE_FORMAT = "%Y-%m-%d"
 DAYS_BACK = 31
-OUTBOUND_ATTRIBUTE_MESSAGE_DIR = os.getcwd() + '/../test/files'
-INBOUND_ATTRIBUTE_MESSAGE_DIR = os.getcwd() + '/../test/files'
-OUTBOUND_SERVICE_MESSAGE_DIR = os.getcwd() + '/../test/files'
-INBOUND_SERVICE_MESSAGE_DIR = os.getcwd() + '/../test/files'
+OUTBOUND_ATTRIBUTE_MESSAGE_DIR = os.getcwd() + '/downloaded/outbound'
+INBOUND_ATTRIBUTE_MESSAGE_DIR = os.getcwd() + '/downloaded/inbound'
+OUTBOUND_SERVICE_MESSAGE_DIR = os.getcwd() + '/downloaded/outbound'
+INBOUND_SERVICE_MESSAGE_DIR = os.getcwd() + '/downloaded/inbound'
 OUTBOUND_ATTRIBUTE_MESSAGE = OUTBOUND_ATTRIBUTE_MESSAGE_DIR +'/serviceAttributesOutbound'
 INBOUND_ATTRIBUTE_MESSAGE = INBOUND_ATTRIBUTE_MESSAGE_DIR +'/serviceAttributesInbound'
 OUTBOUND_SERVICE_MESSAGE = OUTBOUND_SERVICE_MESSAGE_DIR +'/serviceAttributesOutboundTestdata'
@@ -36,22 +36,24 @@ def writeServiceMetricsTestData(from_station, to_station,from_time, to_time, to_
     for counter in range(0, days_difference):
         d = (to_date - timedelta(days=counter)).strftime(DATE_FORMAT)
         print ("getting all data for date - " + str(d))
-        try:
-            creds = getCredentials('/Users/simonwilliams/Documents/trainApp/trainConfig.txt')
-            response = requests.post('https://hsp-prod.rockshore.net/api/v1/serviceMetrics',
-                                     auth=(creds[0],creds[1]),
-                                     json={'from_loc':from_station,'to_loc':to_station,'from_time':from_time,'to_time':to_time,
-                                           'from_date':d,'to_date':d,'days':'WEEKDAY'})
+        fname = fileName + str(d) + ".txt"
+        if not os.path.isfile(fname):
+            try:
+                creds = getCredentials('/Users/simonwilliams/Documents/trainApp/trainConfig.txt')
+                response = requests.post('https://hsp-prod.rockshore.net/api/v1/serviceMetrics',
+                                         auth=(creds[0],creds[1]),
+                                         json={'from_loc':from_station,'to_loc':to_station,'from_time':from_time,'to_time':to_time,
+                                               'from_date':d,'to_date':d,'days':'WEEKDAY'})
 
-            response.raise_for_status()
-        except HTTPError as http_err:
-            print(f'HTTP error occured:{http_err}')
-            print(f'HTTP error occurred: {http_err}')
-        except Exception as err:
-            print(f'Other error occurred: {err}')
-        #now we write out the file to the test dir.
-        fname = fileName + str(counter) + ".txt"
-        writeFile(fname,json.dumps(response.json()))
+                response.raise_for_status()
+            except HTTPError as http_err:
+                print(f'HTTP error occured:{http_err}')
+                print(f'HTTP error occurred: {http_err}')
+            except Exception as err:
+                print(f'Other error occurred: {err}')
+            #now we write out the file to the test dir.
+
+            writeFile(fname,json.dumps(response.json()))
 
 def writeFile(fileName,data):
 
@@ -201,6 +203,7 @@ def filesInDir(dir,filename):
 def getSecondaryTrainObject(list_of_train_objects):
     #iterate though and pull out the tuple with the biggest delay time
     delay_time = 0
+    listlocation = 0
     for index, item in enumerate(list_of_train_objects):
         for t in item:
             if t.delay_time > delay_time:
@@ -236,16 +239,17 @@ def writeLateTrainsToFile(fileName,trainObjectList, arrival):
 
 if __name__== "__main__":
     #generate to journey
-    generateOutbound = False
+    generateOutbound = True
     generateInbound = True
 
     if(generateOutbound):
-        if(False):
+        if(True):
             writeServiceMetricsTestData('GOD','WAT','0400','1300',date.today(), DAYS_BACK, OUTBOUND_ATTRIBUTE_MESSAGE)
             #all serviceMessages created
             outboundPidList = []
             for outboundCounter in range (0,DAYS_BACK):
-                outboundPidList.append(generatePidList(readjson(OUTBOUND_ATTRIBUTE_MESSAGE + str(outboundCounter)+ '.txt')))
+                d = (date.today() - timedelta(days=outboundCounter)).strftime(DATE_FORMAT)
+                outboundPidList.append(generatePidList(readjson(OUTBOUND_ATTRIBUTE_MESSAGE + str(d)+ '.txt')))
             for outboundPidCounter, outboundPids in enumerate(outboundPidList):
                 writeAttributeMessageTestData(outboundPids,OUTBOUND_SERVICE_MESSAGE + str(outboundPidCounter))
         listOfJsonLists = []
@@ -281,13 +285,13 @@ if __name__== "__main__":
 
     #generate from journey
     if(generateInbound):
-        if(False):
+        if(True):
             writeServiceMetricsTestData('WAT','GOD','1200','2200',date.today(), DAYS_BACK, INBOUND_ATTRIBUTE_MESSAGE)
-            #writeServiceMetricsTestData('GOD','WAT','0400','1300',date.today(), DAYS_BACK, OUTBOUND_ATTRIBUTE_MESSAGE)
             #all serviceMessages created
             outboundPidList = []
             for outboundCounter in range (0,DAYS_BACK):
-                outboundPidList.append(generatePidList(readjson(INBOUND_ATTRIBUTE_MESSAGE + str(outboundCounter)+ '.txt')))
+                d = (date.today() - timedelta(days=outboundCounter)).strftime(DATE_FORMAT)
+                outboundPidList.append(generatePidList(readjson(INBOUND_ATTRIBUTE_MESSAGE + str(d)+ '.txt')))
             for outboundPidCounter, outboundPids in enumerate(outboundPidList):
                 writeAttributeMessageTestData(outboundPids,INBOUND_SERVICE_MESSAGE + str(outboundPidCounter))
         listOfJsonLists = []
