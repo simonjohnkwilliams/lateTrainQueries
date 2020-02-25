@@ -1,5 +1,4 @@
-import configparser
-import requests
+import configparser,sys,shutil,requests
 from datetime import date,datetime,timedelta
 import json
 import os
@@ -9,7 +8,6 @@ from os import listdir
 from os.path import isfile, join
 from LateObject import LateObject
 from TrainLine import JsonArgs
-import sys
 
 DATE_FORMAT = "%Y-%m-%d"
 OUTBOUND_ATTRIBUTE_MESSAGE_DIR = os.getcwd() + '/downloaded/outbound/sao'
@@ -41,6 +39,7 @@ TO_LOCATION_STRING = 'TO_LOCATION'
 START_TIME = 'START_TIME'
 END_TIME = 'END_TIME'
 RESULT_FILE_STRING = 'LATE_TRAIN_STRING'
+CLEAR_OLD_DATA_STRING = 'CLEAR_OLD_DATA_STRING'
 
 
 def writeServiceMetricsTestData(from_station, to_station,from_time, to_time, to_date,days_difference, fileName):
@@ -69,13 +68,11 @@ def writeServiceMetricsTestData(from_station, to_station,from_time, to_time, to_
             writeFile(fname,json.dumps(response.json()))
 
 def writeFile(fileName,data):
-
     f = open(fileName, "w+")
     f.write(data)
     f.close()
 
 def writeAttributeMessageTestData(pidList,fileName):
-
     for pid in pidList:
         fname = fileName + pid + ".json"
         if not os.path.isfile(fname):
@@ -106,7 +103,6 @@ def generatePidList(dir):
     return ridList
 
 def getCredentials(credentialsFile):
-
     config = configparser.ConfigParser()
     config.read(credentialsFile)
     username = config.get("configuration","username")
@@ -149,13 +145,6 @@ def generateLateTrainObject(departureLocation, arrivalLocation, serviceAttribute
                 lateObjectArray.append(lateObjectInstance)
     return lateObjectArray
 
-def filesInDir(dir,filename):
-    counter = 0
-    for file in os.listdir(dir):
-        if fnmatch.fnmatch(file, filename +'*'):
-            counter +=1
-    return counter
-
 #this does where the latest object when the endpoint is the last station.
 def getLatestTrainObject(listOfTrainObjects):
     returnTrainObjectList = {}
@@ -177,9 +166,6 @@ def getLatestTrainObject(listOfTrainObjects):
     return returnTrainObjectList
 
 def writeLateTrainsToFile(fileName,trainObjectList, arrival):
-    #need to update the writer for specifc outbound journeys.
-    #latestTrainList = list(trainObjectList.keys())
-    #latestTrainList.sort()
     output = 'Outbound Train To ' + arrival + '\n'
     output = output + 'Date, Departure Time, Delay Time' + '\n'
     for key in sorted(trainObjectList.keys()):
@@ -188,7 +174,6 @@ def writeLateTrainsToFile(fileName,trainObjectList, arrival):
         arrivalTrain = trainObjectList[key][0] if trainObjectList[key][0].departureStation == False else trainObjectList[key][1]
         if departTrain.date_of_service != None:
             output =  output + str(departTrain.date_of_service) + ','+ str(departTrain.gbtt_ptd) +',' + str(arrivalTrain.delay_time) + '\n'
-
     writeFile(os.getcwd() +'/Results/'+ fileName+'.csv',output)
 
 def trimToRouteOnlyDictionary(listOfAllTrainTimes, departureStation, arrivalLocation):
@@ -206,8 +191,23 @@ def trimToRouteOnlyDictionary(listOfAllTrainTimes, departureStation, arrivalLoca
                     lateTrainDictionary[serviceAttribute[SERVICE_ATTRIBUTES_DETAILS][DATE_OF_SERVICE]] = [lateTrainArray]
     return lateTrainDictionary
 
+def clearOldData(clearOldData):
+    if(clearOldData):
+        listFileDirectories = [OUTBOUND_ATTRIBUTE_MESSAGE_DIR,INBOUND_ATTRIBUTE_MESSAGE_DIR,OUTBOUND_SERVICE_MESSAGE_DIR ,INBOUND_SERVICE_MESSAGE_DIR]
+        for dir in listFileDirectories:
+            for filename in os.listdir(dir):
+                file_path = os.path.join(dir, filename)
+                try:
+                    if os.path.isfile(file_path) or os.path.islink(file_path):
+                        os.unlink(file_path)
+                    elif os.path.isdir(file_path):
+                        shutil.rmtree(file_path)
+                except Exception as e:
+                    print('Failed to delete %s. Reason: %s' % (file_path, e))
+
 def newMain(serviceDetailsMap):
     for key, value in serviceDetailsMap.items():
+        clearOldData(value[CLEAR_OLD_DATA_STRING])
         writeServiceMetricsTestData(value[DEPARTURE_STATION],value[TO_LOCATION_STRING],value[START_TIME],
                                     value[END_TIME],value[START_DATE_STRING], value[DAYS_BACK_STRING], value[FILE_LOCATION_STRING])
         writeAttributeMessageTestData(generatePidList(value[DIR_LOCATION_STRING]),OUTBOUND_SERVICE_MESSAGE)
@@ -222,72 +222,3 @@ if __name__== "__main__":
     serviceDetailsMap = JsonArgs.getJson(sys.argv)
     newMain(serviceDetailsMap)
     print('All complete')
-
-'''def getSecondaryTrainObject(list_of_train_objects):
-    #iterate though and pull out the tuple with the biggest delay time
-    delay_time = 0
-    listlocation = 0
-    for index, item in enumerate(list_of_train_objects):
-        for t in item:
-            if t.delay_time > delay_time:
-                delay_time = t.delay_time
-                listlocation = index
-
-    return list_of_train_objects[listlocation]'''
-
-'''def generateLateTrainDictionary(location, date_of_service):
-    locationsList = serviceAttribute[SERVICE_ATTRIBUTES_DETAILS][LOCATIONS]
-    lateDictionary={}
-    for item in locationsList:
-        #turns out the late reason is not actually always applied.
-        if location in item[LOCATION]:
-            lateObjectInstance = LateObject()
-            lateObjectInstance.actual_ta = item[ACTUAL_TA]
-            lateObjectInstance.actual_td = item[ACTUAL_TD]
-            lateObjectInstance.gbtt_pta =item[GBTT_PTA]
-            lateObjectInstance.gbtt_ptd =item[GBTT_PTD]
-            lateObjectInstance.late_canc_reason =item[LATE_CANC_REASON]
-            lateObjectInstance.location=item[LOCATION]
-            lateObjectInstance.date_of_service=date_of_service
-            if item[ACTUAL_TA] != '' and item[GBTT_PTA] != '':
-                lateObjectInstance.delay_time = LateObject.calculate_delay(int(item[ACTUAL_TA]),int(item[GBTT_PTA]))
-            else: lateObjectInstance.delay_time = 0
-            if lateObjectInstance.delay_time > 1:
-                if date_of_service in lateDictionary:
-                    list = lateDictionary[date_of_service]
-                    list.append(lateObjectInstance)
-                    lateDictionary[date_of_service] = list
-                else:
-                    lateDictionary[date_of_service] = [lateObjectInstance]
-
-    #At this point we should have only one item in the dictionary
-    if date_of_service in lateDictionary:
-        if len(lateDictionary[date_of_service]) == 1:
-            print('found for the date = ' + date_of_service)
-            return lateDictionary[date_of_service][0]
-        else: print ("Multiple events found")
-    lateDictionary[date_of_service] = {}
-    return lateDictionary'''
-
-'''def matchingLateTrainObjects(departureLocation, arrivalLocation, serviceJson):
-    arrivalLocationObject = [d for d in serviceJson[LOCATIONS] if d[LOCATION] == arrivalLocation][0]
-    #arrivalLocationObject = arrivalLocationObjects[0] if arrivalLocationObjects else None
-    if(arrivalLocationObject != None):
-        arrivallateObjectInstance = createLateObject(arrivalLocationObject,serviceJson[DATE_OF_SERVICE],departureLocation)
-        departurelateObjectInstance = createLateObject([d for d in serviceJson[LOCATIONS] if d[LOCATION] == departureLocation][0],serviceJson[DATE_OF_SERVICE],departureLocation)
-        return arrivallateObjectInstance, departurelateObjectInstance'''
-
-'''def createLateObject(item,date_of_service,departureLocation):
-    lateObjectInstance = LateObject()
-    lateObjectInstance.actual_ta = item[ACTUAL_TA]
-    lateObjectInstance.actual_td = item[ACTUAL_TD]
-    lateObjectInstance.gbtt_pta =item[GBTT_PTA]
-    lateObjectInstance.gbtt_ptd =item[GBTT_PTD]
-    lateObjectInstance.late_canc_reason =item[LATE_CANC_REASON]
-    lateObjectInstance.location=item[LOCATION]
-    lateObjectInstance.date_of_service=date_of_service
-    lateObjectInstance.departureStation= (departureLocation == item[LOCATION])
-    if item[ACTUAL_TA] != '' and item[GBTT_PTA] != '':
-        lateObjectInstance.delay_time = LateObject.calculate_delay(item[ACTUAL_TA],item[GBTT_PTA])
-    else: lateObjectInstance.delay_time = 0
-    return lateObjectInstance'''

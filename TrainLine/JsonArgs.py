@@ -37,6 +37,7 @@ END_TIME = 'END_TIME'
 RESULT_FILE_STRING = 'LATE_TRAIN_STRING'
 RESULT_FILE_OUTBOUND = 'outboundLateTrains'
 RESULT_FILE_INBOUND = 'inboundLateTrains'
+CLEAR_OLD_DATA_STRING = 'CLEAR_OLD_DATA_STRING'
 
 def getJson(argsJson):
     if (len(argsJson)==1):
@@ -52,7 +53,7 @@ def getJson(argsJson):
                 DIR_LOCATION_STRING:OUTBOUND_ATTRIBUTE_MESSAGE_DIR,
                 SERVICE_FILE_LOCATION_STRING:OUTBOUND_SERVICE_MESSAGE,
                 RESULT_FILE_STRING:RESULT_FILE_OUTBOUND,
-
+                CLEAR_OLD_DATA_STRING:True
             },
             INBOUND_JOURNEY:{
                 DEPARTURE_STATION:"WAT",
@@ -64,7 +65,8 @@ def getJson(argsJson):
                 FILE_LOCATION_STRING:INBOUND_ATTRIBUTE_MESSAGE,
                 DIR_LOCATION_STRING:INBOUND_ATTRIBUTE_MESSAGE_DIR,
                 SERVICE_FILE_LOCATION_STRING:INBOUND_SERVICE_MESSAGE,
-                RESULT_FILE_STRING:RESULT_FILE_INBOUND
+                RESULT_FILE_STRING:RESULT_FILE_INBOUND,
+                CLEAR_OLD_DATA_STRING:True
             }
         }
     serviceMapJourneylocal = argsJson
