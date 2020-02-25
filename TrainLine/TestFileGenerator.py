@@ -7,11 +7,11 @@ import fnmatch
 from requests.exceptions import HTTPError
 from os import listdir
 from os.path import isfile, join
-#from TrainLine import LateObject
 from LateObject import LateObject
+from TrainLine import JsonArgs
+import sys
 
 DATE_FORMAT = "%Y-%m-%d"
-DAYS_BACK = 2
 OUTBOUND_ATTRIBUTE_MESSAGE_DIR = os.getcwd() + '/downloaded/outbound/sao'
 INBOUND_ATTRIBUTE_MESSAGE_DIR = os.getcwd() + '/downloaded/inbound/sao'
 OUTBOUND_SERVICE_MESSAGE_DIR = os.getcwd() + '/downloaded/outbound/saopid'
@@ -30,6 +30,17 @@ LATE_CANC_REASON = 'late_canc_reason'
 DATE_OF_SERVICE = 'date_of_service'
 SERVICE_ATTRIBUTES_DETAILS = 'serviceAttributesDetails'
 DEPARTURE_STATION = 'departureStation'
+INBOUND_JOURNEY = 'INBOUND_JOURNEY'
+OUTBOUND_JOURNEY = 'OUTBOUND_JOURNEY'
+START_DATE_STRING = 'START_DATE'
+DAYS_BACK_STRING = 'DAYS+BACK'
+FILE_LOCATION_STRING = 'FILE_LOCATION_STRING'
+DIR_LOCATION_STRING = 'DIR_LOCATION_STRING'
+START_LOCATION_STRING = 'START_LOCATION'
+TO_LOCATION_STRING = 'TO_LOCATION'
+START_TIME = 'START_TIME'
+END_TIME = 'END_TIME'
+RESULT_FILE_STRING = 'LATE_TRAIN_STRING'
 
 
 def writeServiceMetricsTestData(from_station, to_station,from_time, to_time, to_date,days_difference, fileName):
@@ -55,8 +66,6 @@ def writeServiceMetricsTestData(from_station, to_station,from_time, to_time, to_
             except Exception as err:
                 print(f'Other error occurred: {err}')
                 continue
-            #now we write out the file to the test dir.
-
             writeFile(fname,json.dumps(response.json()))
 
 def writeFile(fileName,data):
@@ -66,6 +75,7 @@ def writeFile(fileName,data):
     f.close()
 
 def writeAttributeMessageTestData(pidList,fileName):
+
     for pid in pidList:
         fname = fileName + pid + ".json"
         if not os.path.isfile(fname):
@@ -82,16 +92,17 @@ def writeAttributeMessageTestData(pidList,fileName):
                 print(f'Other error occurred: {err}')
             writeFile(fname, json.dumps(response.json()))
 
-def generatePidList(serviceMetricJson):
+def generatePidList(dir):
     ridList = []
-    for key in serviceMetricJson["Services"]:
-        if "serviceAttributesMetrics" in key:
-            ridsDict = key["serviceAttributesMetrics"]
-            if "rids" in ridsDict:
-                rList = ridsDict["rids"]
-                if(len(rList)>0):
-                    ridList.append(rList[0])
-
+    files = [f for f in listdir(dir) if isfile(join(dir, f))]
+    for fileName in files:
+        for key in readjson(dir + '/' + fileName)["Services"]:
+            if "serviceAttributesMetrics" in key:
+                ridsDict = key["serviceAttributesMetrics"]
+                if "rids" in ridsDict:
+                    rList = ridsDict["rids"]
+                    if(len(rList)>0):
+                        ridList.append(rList[0])
     return ridList
 
 def getCredentials(credentialsFile):
@@ -116,30 +127,7 @@ def generateAttrbuteDictionary(directory):
             jsonlist.append(readjson(directory + '/' +name))
         return jsonlist
 
-def matchingLateTrainObjects(departureLocation, arrivalLocation, serviceJson):
-    arrivalLocationObject = [d for d in serviceJson[LOCATIONS] if d[LOCATION] == arrivalLocation][0]
-    #arrivalLocationObject = arrivalLocationObjects[0] if arrivalLocationObjects else None
-    if(arrivalLocationObject != None):
-        arrivallateObjectInstance = createLateObject(arrivalLocationObject,serviceJson[DATE_OF_SERVICE],departureLocation)
-        departurelateObjectInstance = createLateObject([d for d in serviceJson[LOCATIONS] if d[LOCATION] == departureLocation][0],serviceJson[DATE_OF_SERVICE],departureLocation)
-        return arrivallateObjectInstance, departurelateObjectInstance
-
-def createLateObject(item,date_of_service,departureLocation):
-    lateObjectInstance = LateObject()
-    lateObjectInstance.actual_ta = item[ACTUAL_TA]
-    lateObjectInstance.actual_td = item[ACTUAL_TD]
-    lateObjectInstance.gbtt_pta =item[GBTT_PTA]
-    lateObjectInstance.gbtt_ptd =item[GBTT_PTD]
-    lateObjectInstance.late_canc_reason =item[LATE_CANC_REASON]
-    lateObjectInstance.location=item[LOCATION]
-    lateObjectInstance.date_of_service=date_of_service
-    lateObjectInstance.departureStation= (departureLocation == item[LOCATION])
-    if item[ACTUAL_TA] != '' and item[GBTT_PTA] != '':
-        lateObjectInstance.delay_time = LateObject.calculate_delay(item[ACTUAL_TA],item[GBTT_PTA])
-    else: lateObjectInstance.delay_time = 0
-    return lateObjectInstance
-
-def generateLateTrainObject(departureLocation, arrivalLocation, date_of_service):
+def generateLateTrainObject(departureLocation, arrivalLocation, serviceAttribute):
     locationsList = serviceAttribute[SERVICE_ATTRIBUTES_DETAILS][LOCATIONS]
     lateObjectArray = []
     for item in locationsList:
@@ -152,7 +140,7 @@ def generateLateTrainObject(departureLocation, arrivalLocation, date_of_service)
             lateObjectInstance.gbtt_ptd =item[GBTT_PTD]
             lateObjectInstance.late_canc_reason =item[LATE_CANC_REASON]
             lateObjectInstance.location=item[LOCATION]
-            lateObjectInstance.date_of_service=date_of_service
+            lateObjectInstance.date_of_service=serviceAttribute[SERVICE_ATTRIBUTES_DETAILS][DATE_OF_SERVICE]
             lateObjectInstance.departureStation= (departureLocation == item[LOCATION])
             if item[ACTUAL_TA] != '' and item[GBTT_PTA] != '':
                 lateObjectInstance.delay_time = LateObject.calculate_delay(item[ACTUAL_TA],item[GBTT_PTA])
@@ -161,7 +149,93 @@ def generateLateTrainObject(departureLocation, arrivalLocation, date_of_service)
                 lateObjectArray.append(lateObjectInstance)
     return lateObjectArray
 
-def generateLateTrainDictionary(location, date_of_service):
+def filesInDir(dir,filename):
+    counter = 0
+    for file in os.listdir(dir):
+        if fnmatch.fnmatch(file, filename +'*'):
+            counter +=1
+    return counter
+
+#this does where the latest object when the endpoint is the last station.
+def getLatestTrainObject(listOfTrainObjects):
+    returnTrainObjectList = {}
+    for dayList in listOfTrainObjects.values():
+        for timeList in dayList:
+            #set the arrival and departure for the day
+            if len(timeList) ==2:
+                currentDeparture = timeList[0]
+                currentArrival = timeList[1]
+                if currentArrival.date_of_service not in returnTrainObjectList:
+                    returnTrainObjectList[currentArrival.date_of_service] = [currentDeparture,currentArrival]
+                    continue
+            else: continue
+            #now to compare the lateness with the current latest train.
+            for trainArray in returnTrainObjectList.values():
+                trainObjectArrival = trainArray[1]
+                if int(trainObjectArrival.delay_time) < int(currentArrival.delay_time):
+                    returnTrainObjectList[currentArrival.date_of_service] = [currentDeparture,currentArrival]
+    return returnTrainObjectList
+
+def writeLateTrainsToFile(fileName,trainObjectList, arrival):
+    #need to update the writer for specifc outbound journeys.
+    #latestTrainList = list(trainObjectList.keys())
+    #latestTrainList.sort()
+    output = 'Outbound Train To ' + arrival + '\n'
+    output = output + 'Date, Departure Time, Delay Time' + '\n'
+    for key in sorted(trainObjectList.keys()):
+        vars = trainObjectList[key]
+        departTrain = trainObjectList[key][0] if trainObjectList[key][0].departureStation == True else trainObjectList[key][1]
+        arrivalTrain = trainObjectList[key][0] if trainObjectList[key][0].departureStation == False else trainObjectList[key][1]
+        if departTrain.date_of_service != None:
+            output =  output + str(departTrain.date_of_service) + ','+ str(departTrain.gbtt_ptd) +',' + str(arrivalTrain.delay_time) + '\n'
+
+    writeFile(os.getcwd() +'/Results/'+ fileName+'.csv',output)
+
+def trimToRouteOnlyDictionary(listOfAllTrainTimes, departureStation, arrivalLocation):
+    lateTrainDictionary = {}
+    for serviceAttribute in listOfAllTrainTimes:
+        if serviceAttribute != None and SERVICE_ATTRIBUTES_DETAILS in serviceAttribute and DATE_OF_SERVICE in serviceAttribute[SERVICE_ATTRIBUTES_DETAILS] and LOCATIONS in serviceAttribute[SERVICE_ATTRIBUTES_DETAILS]:
+            lateTrainArray = generateLateTrainObject(departureStation,arrivalLocation,serviceAttribute)
+            if len(lateTrainArray) == 2 and lateTrainArray[0] != None and lateTrainArray[1] != None:
+                dateOfService = lateTrainArray[0].date_of_service
+                if dateOfService in lateTrainDictionary:
+                    ltl = lateTrainDictionary[serviceAttribute[SERVICE_ATTRIBUTES_DETAILS][DATE_OF_SERVICE]]
+                    ltl.append(lateTrainArray)
+                    lateTrainDictionary[serviceAttribute[SERVICE_ATTRIBUTES_DETAILS][DATE_OF_SERVICE]] = ltl
+                else:
+                    lateTrainDictionary[serviceAttribute[SERVICE_ATTRIBUTES_DETAILS][DATE_OF_SERVICE]] = [lateTrainArray]
+    return lateTrainDictionary
+
+def newMain(serviceDetailsMap):
+    for key, value in serviceDetailsMap.items():
+        writeServiceMetricsTestData(value[DEPARTURE_STATION],value[TO_LOCATION_STRING],value[START_TIME],
+                                    value[END_TIME],value[START_DATE_STRING], value[DAYS_BACK_STRING], value[FILE_LOCATION_STRING])
+        writeAttributeMessageTestData(generatePidList(value[DIR_LOCATION_STRING]),OUTBOUND_SERVICE_MESSAGE)
+        listOfAllTrainTimes = generateAttrbuteDictionary(OUTBOUND_SERVICE_MESSAGE_DIR)
+        #create a map of the to and from stations to compare.
+        routeDictionary = trimToRouteOnlyDictionary(listOfAllTrainTimes,value[DEPARTURE_STATION],value[TO_LOCATION_STRING])
+        latestTrainDictonary = getLatestTrainObject(routeDictionary)
+        writeLateTrainsToFile(value[RESULT_FILE_STRING],latestTrainDictonary,value[TO_LOCATION_STRING])
+        print('Completed ' + value[RESULT_FILE_STRING])
+
+if __name__== "__main__":
+    serviceDetailsMap = JsonArgs.getJson(sys.argv)
+    newMain(serviceDetailsMap)
+    print('All complete')
+
+'''def getSecondaryTrainObject(list_of_train_objects):
+    #iterate though and pull out the tuple with the biggest delay time
+    delay_time = 0
+    listlocation = 0
+    for index, item in enumerate(list_of_train_objects):
+        for t in item:
+            if t.delay_time > delay_time:
+                delay_time = t.delay_time
+                listlocation = index
+
+    return list_of_train_objects[listlocation]'''
+
+'''def generateLateTrainDictionary(location, date_of_service):
     locationsList = serviceAttribute[SERVICE_ATTRIBUTES_DETAILS][LOCATIONS]
     lateDictionary={}
     for item in locationsList:
@@ -193,126 +267,27 @@ def generateLateTrainDictionary(location, date_of_service):
             return lateDictionary[date_of_service][0]
         else: print ("Multiple events found")
     lateDictionary[date_of_service] = {}
-    return lateDictionary
+    return lateDictionary'''
 
-def filesInDir(dir,filename):
-    counter = 0
-    for file in os.listdir(dir):
-        if fnmatch.fnmatch(file, filename +'*'):
-            counter +=1
-    return counter
+'''def matchingLateTrainObjects(departureLocation, arrivalLocation, serviceJson):
+    arrivalLocationObject = [d for d in serviceJson[LOCATIONS] if d[LOCATION] == arrivalLocation][0]
+    #arrivalLocationObject = arrivalLocationObjects[0] if arrivalLocationObjects else None
+    if(arrivalLocationObject != None):
+        arrivallateObjectInstance = createLateObject(arrivalLocationObject,serviceJson[DATE_OF_SERVICE],departureLocation)
+        departurelateObjectInstance = createLateObject([d for d in serviceJson[LOCATIONS] if d[LOCATION] == departureLocation][0],serviceJson[DATE_OF_SERVICE],departureLocation)
+        return arrivallateObjectInstance, departurelateObjectInstance'''
 
-def getSecondaryTrainObject(list_of_train_objects):
-    #iterate though and pull out the tuple with the biggest delay time
-    delay_time = 0
-    listlocation = 0
-    for index, item in enumerate(list_of_train_objects):
-        for t in item:
-            if t.delay_time > delay_time:
-                delay_time = t.delay_time
-                listlocation = index
-
-    return list_of_train_objects[listlocation]
-
-#this does where the latest object when the endpoint is the last station.
-def getLatestTrainObject(listOfTrainObjects):
-    if len(listOfTrainObjects) !=0:
-        latestDeparture = listOfTrainObjects[0][0]
-        latestArrival = listOfTrainObjects[0][1]
-    else: return [LateObject,LateObject]
-    latestTrainObjects = [latestDeparture,latestArrival]
-    for trainObjectArray in listOfTrainObjects:
-        trainObjectDepart = trainObjectArray[0]
-        trainObjectArrival = trainObjectArray[1]
-        if int(trainObjectArrival.delay_time) > latestTrainObjects[1].delay_time:
-            latestTrainObjects = [trainObjectDepart,trainObjectArrival]
-    return latestTrainObjects
-
-def writeLateTrainsToFile(fileName,trainObjectList, arrival):
-#need to update the writer for specifc outbound journeys.
-    output = 'Outbound Train To ' + arrival + '\n'
-    output = output + 'Date, Departure Time, Delay Time' + '\n'
-    for trainObjectArray in trainObjectList:
-        departTrain = trainObjectArray[0] if trainObjectArray[0].departureStation == True else trainObjectArray[1]
-        arrivalTrain = trainObjectArray[0] if trainObjectArray[0].departureStation == False else trainObjectArray[1]
-        if departTrain.date_of_service != None:
-            output =  output + str(departTrain.date_of_service) + ','+ str(departTrain.gbtt_ptd) +',' + str(arrivalTrain.delay_time) + '\n'
-
-    writeFile(os.getcwd() +'/Results/'+ fileName+'.csv',output)
-
-if __name__== "__main__":
-    #generate to journey
-    generateOutbound = True
-    generateInbound = True
-
-    if(generateOutbound):
-        if(True):
-            writeServiceMetricsTestData('GOD','WAT','0400','1300',date.today(), DAYS_BACK, OUTBOUND_ATTRIBUTE_MESSAGE)
-            outboundPidList = []
-            for outboundCounter in range (0,DAYS_BACK):
-                d = (date.today() - timedelta(days=outboundCounter)).strftime(DATE_FORMAT)
-                outboundPidList.append(generatePidList(readjson(OUTBOUND_ATTRIBUTE_MESSAGE + str(d)+ '.json')))
-            for outboundPidCounter, outboundPids in enumerate(outboundPidList):
-                writeAttributeMessageTestData(outboundPids,OUTBOUND_SERVICE_MESSAGE)
-        listOfJsonLists = generateAttrbuteDictionary(OUTBOUND_SERVICE_MESSAGE_DIR)
-        #we now have a list of all the json objects for each train journey. each of the list elements should correspond to a date.
-        #filter out all of the list items to the latest train on each day.
-        lateTrainDictionary = {}
-        for serviceAttribute in listOfJsonLists:
-            #this is now the list for the date
-            #for serviceAttribute in jsonLists:
-            if serviceAttribute != None and SERVICE_ATTRIBUTES_DETAILS in serviceAttribute and DATE_OF_SERVICE in serviceAttribute[SERVICE_ATTRIBUTES_DETAILS] and LOCATIONS in serviceAttribute[SERVICE_ATTRIBUTES_DETAILS]:
-                lateTrainArray = generateLateTrainObject('GOD','WAT',serviceAttribute[SERVICE_ATTRIBUTES_DETAILS][DATE_OF_SERVICE])
-                if len(lateTrainArray) == 2 and lateTrainArray[0] != None and lateTrainArray[1] != None:
-                    dateOfService = lateTrainArray[0].date_of_service
-                    if dateOfService in lateTrainDictionary:
-                        ltl = lateTrainDictionary[serviceAttribute[SERVICE_ATTRIBUTES_DETAILS][DATE_OF_SERVICE]]
-                        ltl.append(lateTrainArray)
-                        lateTrainDictionary[serviceAttribute[SERVICE_ATTRIBUTES_DETAILS][DATE_OF_SERVICE]] = ltl
-                    else:
-                         lateTrainDictionary[serviceAttribute[SERVICE_ATTRIBUTES_DETAILS][DATE_OF_SERVICE]] = [lateTrainArray]
-        #we now have the dictionary of all the items according to date
-        latestTrainList = []
-        for dateList in lateTrainDictionary.values():
-            #we now have a date for trains - sort through this and pullout the one with the latest time.
-            #need to sort this list by date.
-            latestTrainList.append(getLatestTrainObject(dateList))
-
-        #we now have a list of the lastest train objects they now need to be formatted correctly and send out
-        latestTrainList.sort(key=lambda x: x[0].date_of_service, reverse=True)
-        writeLateTrainsToFile('outboundLateTrains',latestTrainList,'WAT')
-    print("congratulations all test data outbound has been downloaded.")
-    #generate from journey
-    if(generateInbound):
-        if(True):
-            writeServiceMetricsTestData('WAT','GOD','1201','2200',date.today(), DAYS_BACK, INBOUND_ATTRIBUTE_MESSAGE)
-            outboundPidList = []
-            for outboundCounter in range (0,DAYS_BACK):
-                d = (date.today() - timedelta(days=outboundCounter)).strftime(DATE_FORMAT)
-                if os.path.isfile(INBOUND_ATTRIBUTE_MESSAGE + str(d)+ '.json'):
-                    outboundPidList.append(generatePidList(readjson(INBOUND_ATTRIBUTE_MESSAGE + str(d)+ '.json')))
-            for outboundPidCounter, outboundPids in enumerate(outboundPidList):
-                writeAttributeMessageTestData(outboundPids,INBOUND_SERVICE_MESSAGE)
-        listOfJsonLists = generateAttrbuteDictionary(INBOUND_SERVICE_MESSAGE_DIR)
-        lateTrainDictionary = {}
-        for serviceAttribute in listOfJsonLists:
-            if serviceAttribute != None and SERVICE_ATTRIBUTES_DETAILS in serviceAttribute and DATE_OF_SERVICE in serviceAttribute[SERVICE_ATTRIBUTES_DETAILS] and LOCATIONS in serviceAttribute[SERVICE_ATTRIBUTES_DETAILS]:
-                lateTrainArray = matchingLateTrainObjects('WAT', 'GOD', serviceAttribute[SERVICE_ATTRIBUTES_DETAILS])
-                if len(lateTrainArray) == 2 and lateTrainArray[0] != None and lateTrainArray[1] != None:
-                    dateOfService = lateTrainArray[0].date_of_service
-                    if dateOfService in lateTrainDictionary:
-                        ltl = lateTrainDictionary[serviceAttribute[SERVICE_ATTRIBUTES_DETAILS][DATE_OF_SERVICE]]
-                        ltl.append(lateTrainArray)
-                        lateTrainDictionary[serviceAttribute[SERVICE_ATTRIBUTES_DETAILS][DATE_OF_SERVICE]] = ltl
-                    else:
-                        lateTrainDictionary[serviceAttribute[SERVICE_ATTRIBUTES_DETAILS][DATE_OF_SERVICE]] = [lateTrainArray]
-        #we now have the dictionary of all the items according to date
-        latestTrainList = []
-        for dateList in lateTrainDictionary.values():
-            #we now have a date for trains - sort through this and pullout the one with the latest time.
-            latestTrainList.append(getSecondaryTrainObject(dateList))
-
-        #we now have a list of the lastest train objects they now need to be formatted correctly and send out
-        latestTrainList.sort(key=lambda x: x[0].date_of_service, reverse=True)
-        writeLateTrainsToFile('inboundLateTrains',latestTrainList,'GOD')
-    print("congratulations All done")
+'''def createLateObject(item,date_of_service,departureLocation):
+    lateObjectInstance = LateObject()
+    lateObjectInstance.actual_ta = item[ACTUAL_TA]
+    lateObjectInstance.actual_td = item[ACTUAL_TD]
+    lateObjectInstance.gbtt_pta =item[GBTT_PTA]
+    lateObjectInstance.gbtt_ptd =item[GBTT_PTD]
+    lateObjectInstance.late_canc_reason =item[LATE_CANC_REASON]
+    lateObjectInstance.location=item[LOCATION]
+    lateObjectInstance.date_of_service=date_of_service
+    lateObjectInstance.departureStation= (departureLocation == item[LOCATION])
+    if item[ACTUAL_TA] != '' and item[GBTT_PTA] != '':
+        lateObjectInstance.delay_time = LateObject.calculate_delay(item[ACTUAL_TA],item[GBTT_PTA])
+    else: lateObjectInstance.delay_time = 0
+    return lateObjectInstance'''
