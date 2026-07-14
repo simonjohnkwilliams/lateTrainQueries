@@ -1,0 +1,19 @@
+{
+  "Services": [
+    {
+      "serviceAttributesMetrics": {
+        "rids": ["202001010727001"]
+      }
+    },
+    {
+      "serviceAttributesMetrics": {
+        "rids": ["202001010810001"]
+      }
+    },
+    {
+      "serviceAttributesMetrics": {
+        "rids": []
+      }
+    }
+  ]
+}

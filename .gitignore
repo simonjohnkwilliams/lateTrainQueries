@@ -1,0 +1,17 @@
+# Credentials — never commit
+creds/
+
+# Downloaded API responses (cache)
+TrainLine/downloaded/
+
+# Live-capture working dir (used when refreshing recorded fixtures)
+live-capture/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# IDE
+.idea/workspace.xml
+.idea/copilot.data.migration.agent.xml

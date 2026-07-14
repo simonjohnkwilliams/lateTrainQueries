@@ -1,0 +1,32 @@
+{
+  "serviceAttributesDetails": {
+    "date_of_service": "2020-01-01",
+    "rid": "202001010727001",
+    "locations": [
+      {
+        "location": "GOD",
+        "gbtt_ptd": "0727",
+        "gbtt_pta": "",
+        "actual_td": "0728",
+        "actual_ta": "",
+        "late_canc_reason": ""
+      },
+      {
+        "location": "GUI",
+        "gbtt_ptd": "0735",
+        "gbtt_pta": "0734",
+        "actual_td": "0736",
+        "actual_ta": "0735",
+        "late_canc_reason": ""
+      },
+      {
+        "location": "WAT",
+        "gbtt_ptd": "",
+        "gbtt_pta": "0830",
+        "actual_td": "",
+        "actual_ta": "0853",
+        "late_canc_reason": "Signal failure at Clapham Junction"
+      }
+    ]
+  }
+}

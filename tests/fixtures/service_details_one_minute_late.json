@@ -1,0 +1,24 @@
+{
+  "serviceAttributesDetails": {
+    "date_of_service": "2020-01-03",
+    "rid": "202001030727001",
+    "locations": [
+      {
+        "location": "GOD",
+        "gbtt_ptd": "0727",
+        "gbtt_pta": "",
+        "actual_td": "0727",
+        "actual_ta": "",
+        "late_canc_reason": ""
+      },
+      {
+        "location": "WAT",
+        "gbtt_ptd": "",
+        "gbtt_pta": "0830",
+        "actual_td": "",
+        "actual_ta": "0831",
+        "late_canc_reason": ""
+      }
+    ]
+  }
+}

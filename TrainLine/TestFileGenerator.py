@@ -10,6 +10,8 @@ from LateObject import LateObject
 from TrainLine import JsonArgs
 
 DATE_FORMAT = "%Y-%m-%d"
+DEFAULT_CREDENTIALS_PATH = '/Users/simonwilliams/Documents/trainApp/trainConfig.txt'
+CREDENTIALS_PATH = os.environ.get('HSP_CREDENTIALS_FILE', DEFAULT_CREDENTIALS_PATH)
 OUTBOUND_ATTRIBUTE_MESSAGE_DIR = os.getcwd() + '/downloaded/outbound/sao'
 INBOUND_ATTRIBUTE_MESSAGE_DIR = os.getcwd() + '/downloaded/inbound/sao'
 OUTBOUND_SERVICE_MESSAGE_DIR = os.getcwd() + '/downloaded/outbound/saopid'
@@ -51,7 +53,7 @@ def writeServiceMetricsTestData(from_station, to_station,from_time, to_time, to_
         fname = fileName + str(d) + ".json"
         if not os.path.isfile(fname):
             try:
-                creds = getCredentials('/Users/simonwilliams/Documents/trainApp/trainConfig.txt')
+                creds = getCredentials(CREDENTIALS_PATH)
                 response = requests.post('https://hsp-prod.rockshore.net/api/v1/serviceMetrics',
                                          auth=(creds[0],creds[1]),
                                          json={'from_loc':from_station,'to_loc':to_station,'from_time':from_time,'to_time':to_time,
@@ -77,7 +79,7 @@ def writeAttributeMessageTestData(pidList,fileName):
         fname = fileName + pid + ".json"
         if not os.path.isfile(fname):
             try:
-                creds = getCredentials('/Users/simonwilliams/Documents/trainApp/trainConfig.txt')
+                creds = getCredentials(CREDENTIALS_PATH)
                 response = requests.post('https://hsp-prod.rockshore.net/api/v1/serviceDetails',
                                          auth=(creds[0],creds[1]),
                                          json={'rid':pid})

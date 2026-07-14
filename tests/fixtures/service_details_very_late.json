@@ -1,0 +1,24 @@
+{
+  "serviceAttributesDetails": {
+    "date_of_service": "2020-01-01",
+    "rid": "202001010810001",
+    "locations": [
+      {
+        "location": "GOD",
+        "gbtt_ptd": "0810",
+        "gbtt_pta": "",
+        "actual_td": "0815",
+        "actual_ta": "",
+        "late_canc_reason": ""
+      },
+      {
+        "location": "WAT",
+        "gbtt_ptd": "",
+        "gbtt_pta": "0915",
+        "actual_td": "",
+        "actual_ta": "1012",
+        "late_canc_reason": "Train failure"
+      }
+    ]
+  }
+}
