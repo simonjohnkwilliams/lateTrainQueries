@@ -93,6 +93,22 @@ class Claim:
 
 
 @dataclass(frozen=True)
+class FetchedDay:
+    """Engine input for one date: the fetch outcome plus the day's services.
+
+    Produced by ``adapters.hsp_client`` (Epic 2) and consumed by
+    ``engine.optimise`` (AD-1). ``status`` is authoritative (AD-5): a
+    ``FETCH_FAILED`` day is passed straight through as a failed ``DayResult``
+    without optimising. ``outbound``/``inbound`` are the day's services per leg.
+    """
+
+    date: str
+    status: FetchStatus
+    outbound: tuple[Service, ...] = field(default_factory=tuple)
+    inbound: tuple[Service, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
 class DayResult:
     """The engine's per-day output — the only legal engine return unit (AD-1).
 

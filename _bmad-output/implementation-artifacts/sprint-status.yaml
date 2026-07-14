@@ -54,7 +54,7 @@ development_status:
   1-1-scaffold-the-hexagonal-package-offline-test-harness: done
   1-2-domain-model-service-claim-dayresult: done
   1-3-delay-band-and-payout: done
-  1-4-feasibility-max-payout-optimisation-tie-break: ready-for-dev
+  1-4-feasibility-max-payout-optimisation-tie-break: done
   1-5-gated-cancellation-fallback: ready-for-dev
   epic-1-retrospective: optional
 

@@ -12,6 +12,7 @@ from trainline.engine.models import (
     Claim,
     DayResult,
     Direction,
+    FetchedDay,
     FetchStatus,
     Service,
 )
@@ -34,7 +35,7 @@ def _service(**overrides):
 @pytest.mark.offline
 def test_shapes_defined_only_in_engine_models():
     # AC1: the shapes live here and nowhere else.
-    for shape in (Service, Claim, DayResult, Band, FetchStatus, Direction):
+    for shape in (Service, Claim, DayResult, FetchedDay, Band, FetchStatus, Direction):
         assert shape.__module__ == "trainline.engine.models"
 
 
