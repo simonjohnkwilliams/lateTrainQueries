@@ -19,6 +19,8 @@ import os
 
 import requests
 
+from trainline.engine.models import Direction, Service
+
 HSP_BASE_URL = "https://hsp-prod.rockshore.net/api/v1"
 SERVICE_METRICS_URL = f"{HSP_BASE_URL}/serviceMetrics"
 SERVICE_DETAILS_URL = f"{HSP_BASE_URL}/serviceDetails"
@@ -43,3 +45,133 @@ class HspClient:
         response = self._session.post(url, **kwargs)
         response.raise_for_status()
         return response.json()
+
+    def fetch_service_metrics(self, from_loc, to_loc, from_time, to_time,
+                              from_date, to_date):
+        """POST serviceMetrics for one direction/window/date range (FR1).
+
+        Body shape is exactly what the HSP API expects, including
+        ``days: 'WEEKDAY'``. Both directions are queried by calling this with the
+        origin/destination swapped (the composition root does that, FR1).
+        """
+        payload = {
+            "from_loc": from_loc,
+            "to_loc": to_loc,
+            "from_time": from_time,
+            "to_time": to_time,
+            "from_date": from_date,
+            "to_date": to_date,
+            "days": "WEEKDAY",
+        }
+        return self.post_json(SERVICE_METRICS_URL, payload)
+
+    def fetch_service_details(self, rid: str) -> dict:
+        """POST serviceDetails for a single RID (FR2). Body is ``{"rid": rid}``."""
+        return self.post_json(SERVICE_DETAILS_URL, {"rid": rid})
+
+
+def extract_rids(metrics_response: dict) -> list[str]:
+    """Return **all** RIDs in a serviceMetrics response (FR3), order-preserving.
+
+    The old code took ``rids[0]`` only and silently dropped services; this
+    returns every ``Services[].serviceAttributesMetrics.rids`` entry, de-duped.
+    """
+    rids: list[str] = []
+    seen: set[str] = set()
+    for service in metrics_response.get("Services", []):
+        for rid in service.get("serviceAttributesMetrics", {}).get("rids", []):
+            if rid not in seen:
+                seen.add(rid)
+                rids.append(rid)
+    return rids
+
+
+def _raw_minutes(hhmm):
+    """HHMM string → minutes-past-midnight int, or None for empty."""
+    if not hhmm:
+        return None
+    return int(hhmm[:2]) * 60 + int(hhmm[2:4])
+
+
+def _parse_locations(locations):
+    """Convert each calling point's HHMM times to origin-day-relative minutes.
+
+    Walks the calling points in order; when a scheduled time drops below the
+    running maximum it has rolled past midnight, so +1440 is applied from there
+    on (AD-4). Empty times map to None (AD-3).
+    """
+    parsed = []
+    day_offset = 0
+    last = None
+    for loc in locations:
+        sched = loc.get("gbtt_pta") or loc.get("gbtt_ptd")
+        rep = _raw_minutes(sched)
+        if rep is not None:
+            candidate = rep + day_offset
+            if last is not None and candidate < last:
+                day_offset += 1440
+                candidate = rep + day_offset
+            last = candidate
+
+        def _rel(field):
+            raw = _raw_minutes(loc.get(field))
+            return None if raw is None else raw + day_offset
+
+        parsed.append({
+            "location": loc.get("location"),
+            "gbtt_ptd": _rel("gbtt_ptd"),
+            "gbtt_pta": _rel("gbtt_pta"),
+            "actual_td": _rel("actual_td"),
+            "actual_ta": _rel("actual_ta"),
+            "reason": loc.get("late_canc_reason") or None,
+        })
+    return parsed
+
+
+def _find(parsed, crs):
+    for loc in parsed:
+        if loc["location"] == crs:
+            return loc
+    return None
+
+
+def map_service_details(response, origin, destination, direction, date=None):
+    """Map a raw serviceDetails response to a domain ``Service`` (AD-3, AD-4).
+
+    ``origin``/``destination`` are the route leg's CRS codes; calling points are
+    selected by CRS, never by list position (services may start elsewhere, e.g.
+    HAV). Returns ``None`` if this service does not serve both route stops.
+
+    Empty actual times map to ``None`` (AD-3). Empty actuals plus a
+    ``late_canc_reason`` set ``cancelled=True`` and carry the reason as the raw
+    signal only — no fallback delay is computed here (AD-6).
+    """
+    sad = response.get("serviceAttributesDetails") or {}
+    parsed = _parse_locations(sad.get("locations", []))
+    origin_loc = _find(parsed, origin)
+    destination_loc = _find(parsed, destination)
+    if origin_loc is None or destination_loc is None:
+        return None
+
+    scheduled_departure = origin_loc["gbtt_ptd"]
+    scheduled_arrival = destination_loc["gbtt_pta"]
+    if scheduled_departure is None or scheduled_arrival is None:
+        return None
+
+    actual_arrival = destination_loc["actual_ta"]
+    reason = destination_loc["reason"] or origin_loc["reason"]
+    cancelled = actual_arrival is None and reason is not None
+
+    return Service(
+        rid=sad.get("rid"),
+        direction=direction if isinstance(direction, Direction) else Direction(direction),
+        origin=origin,
+        destination=destination,
+        date=date or sad.get("date_of_service"),
+        scheduled_departure=scheduled_departure,
+        scheduled_arrival=scheduled_arrival,
+        actual_departure=origin_loc["actual_td"],
+        actual_arrival=actual_arrival,
+        cancelled=cancelled,
+        reason=reason,
+    )
