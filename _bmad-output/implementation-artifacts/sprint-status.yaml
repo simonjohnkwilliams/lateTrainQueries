@@ -60,7 +60,7 @@ development_status:
 
   # Epic 2: Real historic data from HSP
   epic-2: in-progress
-  2-1-hsp-client-auth-avg-tls-injectable-http-seam: ready-for-dev
+  2-1-hsp-client-auth-avg-tls-injectable-http-seam: done
   2-2-fetch-servicemetrics-and-extract-all-rids: ready-for-dev
   2-3-fetch-servicedetails-and-map-json-service: ready-for-dev
   2-4-idempotent-on-disk-response-cache: ready-for-dev
