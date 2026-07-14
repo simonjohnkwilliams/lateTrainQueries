@@ -5,8 +5,10 @@ state, deterministic. For each day it selects the combination of at most one
 outbound and one inbound claim that maximises total payout, subject to
 feasibility, and breaks ties deterministically. Emits 0, 1, or 2 claims per day.
 
-Cancellation-derived claims are NOT produced here — that is the gated path in
-Story 1.5 (AD-6), off by default. This story ignores cancelled services.
+Cancellation fallback (AD-6, FR12) is a gated path: OFF unless
+``config.enable_cancellation_fallback`` is true, and it stays off in production
+until a real cancelled-train fixture resolves OQ1. When on, an actual late train
+always takes precedence over a cancellation-derived claim **for the same leg**.
 """
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ from typing import Iterable
 
 from trainline.engine.delay import band, calculate_delay, payout
 from trainline.engine.models import (
+    Band,
     Claim,
     DayResult,
     FetchedDay,
@@ -39,38 +42,100 @@ class _Candidate:
 def optimise(days: Iterable[FetchedDay], config=None) -> list[DayResult]:
     """Optimise each fetched day into a ``DayResult`` (FR9, FR10, FR11)."""
     per_day_cap = getattr(config, "per_day_cap", None)
-    return [_optimise_day(day, per_day_cap) for day in days]
+    enable_cancellation = getattr(config, "enable_cancellation_fallback", False)
+    return [
+        _optimise_day(day, per_day_cap, enable_cancellation) for day in days
+    ]
 
 
-def _optimise_day(day: FetchedDay, per_day_cap) -> DayResult:
+def _optimise_day(day: FetchedDay, per_day_cap, enable_cancellation) -> DayResult:
     # AD-5: a failed fetch is passed straight through, never optimised into a
     # clean no-claim.
     if day.status is not FetchStatus.OK:
         return DayResult(date=day.date, status=day.status, claims=())
 
-    outbound_claims = _claimable(day.outbound)
-    inbound_claims = _claimable(day.inbound)
+    outbound_claims = _leg_claimables(day.outbound, enable_cancellation)
+    inbound_claims = _leg_claimables(day.inbound, enable_cancellation)
 
     best = _best_candidate(outbound_claims, inbound_claims, per_day_cap)
     return DayResult(date=day.date, status=FetchStatus.OK, claims=best.claims)
 
 
-def _claimable(services: tuple[Service, ...]) -> list[tuple[Service, Claim]]:
-    """Return (service, claim) for every service that is claimable (>= 15 min).
+def _leg_claimables(services, enable_cancellation):
+    """Claimable (feasibility-service, claim) pairs for one leg/direction.
+
+    Actual late trains take precedence for a leg (AD-6): only when a leg has no
+    actual-late claim does the gated cancellation fallback contribute.
+    """
+    actual = _actual_claimables(services)
+    if actual:
+        return actual
+    if enable_cancellation:
+        return _cancellation_claimables(services)
+    return []
+
+
+def _actual_claimables(services) -> list[tuple[Service, Claim]]:
+    """(service, claim) for every service claimable on its own actual arrival.
 
     Skips cancelled services and services with no recorded destination actual
-    (AD-3) — a missing actual is not delay 0. Sorted deterministically.
+    (AD-3) — a missing actual is not delay 0.
     """
     result = []
     for svc in services:
         if svc.cancelled or svc.actual_arrival is None:
             continue
         delay = calculate_delay(svc.actual_arrival, svc.scheduled_arrival)
-        if band(delay) == band(0):  # Band.NONE — sub-15-min, not claimable
+        if band(delay) is Band.NONE:
             continue
         result.append((svc, _to_claim(svc, delay)))
-    result.sort(key=lambda sc: (sc[0].scheduled_departure, sc[0].rid))
-    return result
+    return _sorted(result)
+
+
+def _cancellation_claimables(services) -> list[tuple[Service, Claim]]:
+    """Cancellation-derived claims (AD-6, FR12) — gated; synthetic-tested (OQ1).
+
+    For each cancelled service, delay = actual_arrival(next catchable) -
+    scheduled_arrival(cancelled), where "next catchable" is the earliest service
+    that actually ran departing at/after the cancelled train's scheduled
+    departure. Represented as an effective ``Service`` (real schedule, next
+    catchable's actuals) so it flows through the same feasibility/pairing logic.
+    """
+    ran = [s for s in services if not s.cancelled and s.actual_arrival is not None]
+    result = []
+    for cancelled in services:
+        if not cancelled.cancelled:
+            continue
+        catchable = [
+            s for s in ran
+            if s.scheduled_departure >= cancelled.scheduled_departure
+        ]
+        if not catchable:
+            continue
+        nxt = min(catchable, key=lambda s: (s.scheduled_departure, s.rid))
+        delay = calculate_delay(nxt.actual_arrival, cancelled.scheduled_arrival)
+        if band(delay) is Band.NONE:
+            continue
+        effective = Service(
+            rid=cancelled.rid,
+            direction=cancelled.direction,
+            origin=cancelled.origin,
+            destination=cancelled.destination,
+            date=cancelled.date,
+            scheduled_departure=cancelled.scheduled_departure,
+            scheduled_arrival=cancelled.scheduled_arrival,
+            actual_departure=nxt.actual_departure,
+            actual_arrival=nxt.actual_arrival,
+            cancelled=False,
+            reason=cancelled.reason,
+        )
+        result.append((effective, _to_claim(effective, delay)))
+    return _sorted(result)
+
+
+def _sorted(pairs):
+    pairs.sort(key=lambda sc: (sc[0].scheduled_departure, sc[0].rid))
+    return pairs
 
 
 def _to_claim(svc: Service, delay: int) -> Claim:
