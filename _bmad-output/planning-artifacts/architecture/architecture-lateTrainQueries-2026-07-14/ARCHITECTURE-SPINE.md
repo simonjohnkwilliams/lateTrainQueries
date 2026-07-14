@@ -95,7 +95,8 @@ graph TD
 ### AD-11 — Band & payout contract
 - **Binds:** `engine.delay`, `engine.models`, `adapters/storage`; FR7, FR13, OQ2
 - **Prevents:** a `payout(None)` crash on a sub-threshold service, and unit/arity clashes between callers
-- **Rule:** `band(delay_min) -> Band` returns an enum that includes an explicit `Band.NONE` for sub-15-min; `payout(band) -> int` returns the numeric percentage with `payout(Band.NONE) == 0`. MVP surfaces the band/percentage, not a £/pence figure (PRD FR14). Any OQ2 extension adds parameters (ticket fare, cap) to `payout`; it does not change the return unit silently.
+- **Rule:** `band(delay_min) -> Band` returns an enum that includes an explicit `Band.NONE` for sub-15-min; `payout(band) -> float` returns the numeric percentage with `payout(Band.NONE) == 0`. MVP surfaces the band/percentage, not a £/pence figure (PRD FR14). Any OQ2 extension adds parameters (ticket fare, cap) to `payout`; it does not change the return unit silently.
+  - _Amended 2026-07-14 (Simon): return type `-> int` → `-> float`; the open-day-return track pays 12.5% at the 15–29 band, which is not an integer._
 
 ### AD-12 — Test-first (TDD) per story
 - **Binds:** every story/epic; FR19, FR20, FR21, NFR1

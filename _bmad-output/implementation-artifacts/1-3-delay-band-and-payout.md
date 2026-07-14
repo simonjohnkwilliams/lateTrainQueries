@@ -29,9 +29,9 @@ so that a service's claimability is unambiguous.
   - [ ] Implement `band(delay_min: int) -> Band` using `Band` imported from `trainline.engine.models` (Story 1.2). Boundaries: `<15 → NONE`, `15–29`, `30–59`, `60–119`, `120+`.
   - [ ] Unit-test every boundary edge: 14→NONE, 15→15–29, 29→15–29, 30→30–59, 59→30–59, 60→60–119, 119→60–119, 120→120+.
 - [ ] **Task 3 — `payout()` (AC: 2, 3)**
-  - [ ] Implement `payout(band: Band) -> <number>` on the **open day return** track: `NONE→0`, `15–29→12.5`, `30–59→25`, `60–119→50`, `120+→100`.
+  - [ ] Implement `payout(band: Band) -> float` on the **open day return** track: `NONE→0.0`, `15–29→12.5`, `30–59→25.0`, `60–119→50.0`, `120+→100.0`.
   - [ ] Ensure `payout(Band.NONE) == 0` (no `KeyError`/crash — AC3).
-  - [ ] **Resolve the int-vs-float return type first** (see Dev Notes open question) and keep the return unit stable.
+  - [ ] Return type is **`float`** (decided — see Dev Notes); keep the return unit stable (percentage), never scale it.
 - [ ] **Task 4 — Acceptance scenarios (AC: 1–4)**
   - [ ] Add `tests/features/delay.feature` (`@offline`) with one scenario per AC and step defs in `tests/test_bdd_delay.py`.
   - [ ] Confirm `python -m pytest` is green offline with no `HSP_CREDENTIALS_FILE`.
@@ -67,15 +67,10 @@ Document this seam in the module docstring so a future dev doesn't "helpfully" a
 
 Band **ordering** is what the optimiser relies on ("higher band wins"); the emitted percentages differ from a single ticket but the ordering is identical (addendum correction note). Delay is always measured at **destination arrival** (WAT for outbound, GOD for inbound).
 
-### ⚠️ OPEN QUESTION / SPEC INCONSISTENCY — `payout` return type (int vs 12.5)
-The Architecture spine **AD-11** states `payout(band) -> int` with `payout(Band.NONE) == 0`. But the addendum's open-day-return track is **12.5** / 25 / 50 / 100 — and **12.5 is not an int**. AC2 explicitly asserts `payout == 12.5`. These conflict.
+### ✅ RESOLVED — `payout` returns `float` (2026-07-14, Simon)
+AD-11 originally read `payout(band) -> int`, which conflicted with the addendum's open-day-return track (`12.5` / 25 / 50 / 100) and AC2 (`payout == 12.5`). **Decision: `payout(band) -> float`** (`12.5`, `25.0`, `50.0`, `100.0`, `NONE → 0.0`). Simplest, matches AC2 verbatim, and MVP only surfaces the band/percentage so float precision is a non-issue at this scale (NFR5). AD-11 in ARCHITECTURE-SPINE.md has been amended `-> int` → `-> float` to match.
 
-**Recommended resolution (pick before implementing, keep stable per AD-11 "does not change the return unit silently"):**
-- **Preferred:** return `float` (`12.5`, `25.0`, …). Simplest, matches AC2 verbatim, MVP only surfaces the band/percentage so float precision is a non-issue at this scale (NFR5). Update AD-11's `-> int` wording to `-> float` (percentage) in the spine.
-- Alternative: return `Decimal("12.5")` to avoid float-sum drift when the optimiser sums two claims — defensible under NFR1 (correctness-first), heavier ergonomically.
-- Avoid: scaling to integer tenths (125/250/…) — technically honours `-> int` but breaks AC2's `== 12.5` and leaks a scaling convention into every caller.
-
-Flag this to Simon/architect; do not silently choose. This also touches **OQ2** (payout base & stacking) — keep `payout`'s signature extensible (it may later take ticket-type/fare params) without changing the base return unit.
+Keep `payout`'s signature extensible for **OQ2** (it may later take ticket-type/fare/cap params) without changing this base return unit. If the optimiser summing two floats ever raises a precision concern under NFR1, revisit `Decimal` then — not now.
 
 ### Dependencies & sequence
 - **Depends on Story 1.2** for `Band` (and `Service`/`Claim` shapes) in `trainline.engine.models`. If 1.2 has not landed, define/confirm `Band` there first — do not define `Band` in `delay.py` (AD-3: models is the single source of shapes; AD-11 binds `Band` to `engine.models`).
@@ -94,7 +89,7 @@ Flag this to Simon/architect; do not silently choose. This also touches **OQ2** 
 - [Source: _bmad-output/planning-artifacts/epics.md#Story 1.3] — user story + ACs
 - [Source: _bmad-output/planning-artifacts/prds/prd-lateTrainQueries-2026-07-14/addendum.md#SWR Delay Repay band table] — band table + `payout(band)` values + worked examples
 - [Source: _bmad-output/planning-artifacts/prds/prd-lateTrainQueries-2026-07-14/prd.md#FR6] delay clamp; #FR7 banding/discard sub-15; #FR14 band not £
-- [Source: ARCHITECTURE-SPINE.md#AD-4] times are integer origin-day-relative minutes, `delay` sole owner; #AD-11 band/payout contract (note the `-> int` conflict above); #AD-1 pure core; #AD-3 models single source; #AD-12 test-first
+- [Source: ARCHITECTURE-SPINE.md#AD-4] times are integer origin-day-relative minutes, `delay` sole owner; #AD-11 band/payout contract (amended `-> int`→`-> float`, see RESOLVED above); #AD-1 pure core; #AD-3 models single source; #AD-12 test-first
 - Depends on: Story 1.2 (`Band` in `engine.models`). Feeds: Story 1.4 (optimiser), Story 3.2 (storage).
 
 ## Dev Agent Record

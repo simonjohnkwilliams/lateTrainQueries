@@ -61,7 +61,10 @@ Per AD-5 and NFR1/CM1, a `FETCH_FAILED` day must never read as a clean no-claim.
 - This scenario is the **successor** to the old `late_trains.feature` `@recorded` scenario (removed in Story 1.1). The old expectation was "3-min delay row at 0708" under the discarded >1-min/worst-per-day model. Under the **new** claimable-delay model (≥15-min threshold), recompute the expected outcome from the fixtures: if no service reaches 15 min at its destination that day, the correct MVP result is **no claim rows** for 2026-05-28 (and the day must read as OK/no-claim, not "not analysed"). Assert the actual claim output the new model yields — do not port the old number.
 
 ### Config defaults (Story 3.1 dependency)
-Default route GOD ⇄ WAT with per-direction windows and lookback come from `adapters/config` (Story 3.1, FR16). `cli` reads config; it does not hard-code the route. Credentials come from `HSP_CREDENTIALS_FILE` (FR17) via config — never inline, never committed.
+Default route GOD ⇄ WAT with **full-day** per-direction windows and lookback come from `adapters/config` (Story 3.1, FR16). `cli` reads config; it does not hard-code the route. Credentials come from `HSP_CREDENTIALS_FILE` (FR17) via config — never inline, never committed.
+
+### Batched orchestration — don't over-pull the HSP API (decided 2026-07-14, Simon)
+The default query is intentionally wide (all inbound + outbound services per day; engine slims down afterward), so `cli` **must fetch the lookback in batches of `RunConfig.batch_size` days** rather than blasting the whole range at once — this keeps HSP request volume polite and the run resumable. Because the Story 2.4 cache skips already-fetched days (NFR4), re-running to continue where a previous batch stopped is cheap and idempotent. Surface a short per-run summary (days fetched this batch, cache hits, any FETCH_FAILED days) so a partial/batched sweep never reads as complete coverage. Do not silently cap coverage — if a batch bound stops short of the full lookback, say so in the output.
 
 ### Dependencies & sequencing
 Depends on **all** prior stories — build this **last**:

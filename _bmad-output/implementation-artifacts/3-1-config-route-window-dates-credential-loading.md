@@ -12,7 +12,7 @@ so that I'm not editing code to change a query, and credentials stay out of the 
 
 ## Acceptance Criteria
 
-1. **Defaults with no arguments.** With no CLI/config overrides, the tool produces a run configuration for **GOD ⇄ WAT** with the per-direction time windows and the lookback window already set. *(Epic 3 AC; FR16)*
+1. **Defaults with no arguments.** With no CLI/config overrides, the tool produces a run configuration for **GOD ⇄ WAT** with **full-day** per-direction windows (capture *every* inbound and outbound service; the engine slims down afterward) and the lookback window already set. *(Epic 3 AC; FR16)*
 2. **Everything is overridable, nothing hard-coded.** Given a config override, the origin/destination CRS codes, the per-direction time windows, and the date/lookback window are **all** configurable — no route, window, or date literal is baked into engine or adapter code paths. *(Epic 3 AC; FR16)*
 3. **Credentials from `HSP_CREDENTIALS_FILE`, never in the repo.** Credentials are read from the file whose path is in the `HSP_CREDENTIALS_FILE` environment variable and are never committed. A missing file, missing env var, or malformed file is reported with a clear, actionable error. *(Epic 3 AC; FR17)*
 
@@ -21,11 +21,11 @@ so that I'm not editing code to change a query, and credentials stay out of the 
 ## Tasks / Subtasks
 
 - [ ] **Task 1 — Define the run-config shape (AC: 1, 2)**
-  - [ ] In `trainline/adapters/config.py`, define an immutable config object (e.g. a frozen `dataclass` `RunConfig`) carrying: `origin`/`destination` CRS, an outbound and an inbound leg each with `from_time`/`to_time` (HSP `HHMM` strings), and the date basis (`to_date` + `lookback_days`, or an explicit date list).
+  - [ ] In `trainline/adapters/config.py`, define an immutable config object (e.g. a frozen `dataclass` `RunConfig`) carrying: `origin`/`destination` CRS, an outbound and an inbound leg each with `from_time`/`to_time` (HSP `HHMM` strings), the date basis (`to_date` + `lookback_days`, or an explicit date list), and a **`batch_size`** (max days fetched per run — supports the batched-fetch strategy below so a single invocation doesn't over-pull from HSP).
   - [ ] Config is **passed explicitly** to whatever needs it (hsp_client, engine, storage) — **no module-level/global mutable state** (AD-3 consistency convention). `cli.py` builds it once and threads it through (AD-8).
   - [ ] Keep the shape season-ticket-tolerant only insofar as it does not preclude a future ticket-type field (FR18 is owned by `engine.models`, but don't hard-block it here).
 - [ ] **Task 2 — Defaults factory (AC: 1)**
-  - [ ] Provide a `default_config()` (or equivalent) returning the GOD ⇄ WAT config with the agreed windows + lookback. Confirm the exact default values with Simon (see Open Questions) — do not silently inherit the old `JsonArgs` values as if canonical.
+  - [ ] Provide a `default_config()` (or equivalent) returning the GOD ⇄ WAT config with **full-day windows both directions** (decided 2026-07-14 — see "Query strategy" below): outbound `0000`–`2359`, inbound `0000`–`2359`, so no service is missed and the ≥15-min claimable-delay logic (Epic 1) does the slimming. Default `lookback_days` capped by the SWR 28-day filing window.
   - [ ] No positional-CLI parsing gap: unlike the old `getJson` (which documented but never parsed positional args), overrides must actually take effect (AC2).
 - [ ] **Task 3 — Overrides (AC: 2)**
   - [ ] Allow overriding origin/destination CRS, each leg's window, and the date/lookback via an explicit override mechanism (kwargs/dict/CLI flags — pick one, document it). Supplied values win; unspecified values fall back to defaults.
@@ -52,6 +52,15 @@ so that I'm not editing code to change a query, and credentials stay out of the 
 - **CREATE `tests/test_config.py`** — new-model config tests.
 - **DO NOT** import or resurrect `TrainLine/JsonArgs.py` — it is removed in Story 1.1. Its constants (`OUTBOUND_JOURNEY`, `DEPARTURE_STATION`, `START_TIME`, `DAYS_BACK`, etc.) are gone by design.
 
+### Query strategy — full-day windows + batched fetch (decided 2026-07-14, Simon)
+The default query is **deliberately wide**: pull *all* inbound and outbound services for each day (full-day `0000`–`2359` both directions), and let the Epic 1 engine apply the ≥15-min claimable-delay logic to slim results down. Rationale: never miss a train Simon could have caught (SM2/CM1 — a wide net is correctness-first).
+
+Because a wide window over a multi-day lookback is a lot of HSP calls, **runs must be batchable so a single invocation doesn't pull too much from the train API**:
+- `RunConfig.batch_size` bounds how many days one run fetches; the composition root (Story 3.3) iterates the lookback in chunks of `batch_size`.
+- The on-disk response cache (Story 2.4, NFR4) means re-running a week never re-hits already-fetched days — so batches are resumable and cheap to repeat.
+- Keep live request volume modest (the old live test deliberately capped to ~3 RIDs "for CI politeness"); document any per-run cap so nothing silently truncates coverage.
+This is a config + orchestration concern only; the engine stays pure. Cross-references: Story 2.4 (cache), Story 3.3 (batched orchestration), Story 2.2/2.5 (fetch + failure contract).
+
 ### Old behaviour, for reference only (superseded — do NOT replicate the bugs)
 The old `JsonArgs.getJson` defaults were: outbound **GOD→WAT `0400`–`1300`**, inbound **WAT→GOD `1200`–`2359`**, lookback **`DAYS_BACK = 9`** ("one week + buffer"), `clear_old_data = True`, start date = two days ago. It documented positional CLI args but **never actually parsed them** (called out in FR16) — the override path here must genuinely work. The old `getCredentials(path)` read INI `[configuration]` → `["username", "password"]` from `creds/trainConfig.txt`. Reuse the **file format**, not the code.
 
@@ -60,7 +69,7 @@ The old `JsonArgs.getJson` defaults were: outbound **GOD→WAT `0400`–`1300`**
 
 ### Testing standards (AD-12, testing convention)
 - Test-first, `@offline`, no network, no real secrets. New file `tests/test_config.py`.
-- **Defaults (AC1):** `default_config()` → GOD ⇄ WAT, both legs' windows set, lookback set; assert the concrete agreed values.
+- **Defaults (AC1):** `default_config()` → GOD ⇄ WAT, both legs' windows = full day (`0000`–`2359`), lookback set, `batch_size` set; assert the concrete values.
 - **Overrides (AC2):** supplying custom CRS / windows / date-basis is honoured and beats defaults; a test that a route/window/date change needs no source edit (drive it purely through the override API).
 - **Credentials (AC3):** write a valid INI file to `tmp_path`, point `HSP_CREDENTIALS_FILE` at it (via `monkeypatch.setenv`), assert it loads; then assert clear errors for (a) env var unset, (b) file missing, (c) malformed file (no `[configuration]`, or missing `username`/`password`). Use `monkeypatch`, never the real creds file.
 - Keep the `pytest.ini` marker convention (`offline`/`recorded`/`live`, `addopts = -m "not live"`) intact.
