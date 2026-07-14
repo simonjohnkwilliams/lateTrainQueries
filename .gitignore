@@ -2,7 +2,7 @@
 creds/
 
 # Downloaded API responses (cache)
-TrainLine/downloaded/
+.hsp-cache/
 
 # Live-capture working dir (used when refreshing recorded fixtures)
 live-capture/

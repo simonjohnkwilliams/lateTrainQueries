@@ -15,6 +15,7 @@ response cache (2.4), and the per-day fetch-failure rollup (2.5). May import
 """
 from __future__ import annotations
 
+import json
 import os
 
 import requests
@@ -29,9 +30,40 @@ SERVICE_DETAILS_URL = f"{HSP_BASE_URL}/serviceDetails"
 class HspClient:
     """Authenticated HSP HTTP client over an injectable transport."""
 
-    def __init__(self, username: str, password: str, session=None):
+    def __init__(self, username: str, password: str, session=None,
+                 cache_dir=None, force_refresh: bool = False):
         self._auth = (username, password)
         self._session = session if session is not None else requests.Session()
+        self._cache_dir = cache_dir  # None disables caching
+        self._force_refresh = force_refresh
+
+    def clear_cache(self) -> None:
+        """Remove all cached responses (the FR4 force-refresh mechanism)."""
+        if not self._cache_dir or not os.path.isdir(self._cache_dir):
+            return
+        for name in os.listdir(self._cache_dir):
+            if name.endswith(".json"):
+                os.remove(os.path.join(self._cache_dir, name))
+
+    def _cached_post(self, cache_key: str, url: str, payload: dict) -> dict:
+        """POST via the on-disk cache (NFR4).
+
+        On a cache hit (and not force_refresh) the cached response is returned
+        and no API call is made. Only *successful* responses are cached —
+        ``post_json`` raises before any write, so a failed fetch is never
+        persisted as a success (supports the AD-5 fetch-failure contract).
+        """
+        if not self._cache_dir:
+            return self.post_json(url, payload)
+        path = os.path.join(self._cache_dir, cache_key)
+        if not self._force_refresh and os.path.isfile(path):
+            with open(path, encoding="utf-8") as fh:
+                return json.load(fh)
+        data = self.post_json(url, payload)
+        os.makedirs(self._cache_dir, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+        return data
 
     def post_json(self, url: str, payload: dict) -> dict:
         """POST ``payload`` as JSON with basic auth; return the parsed body.
@@ -63,11 +95,17 @@ class HspClient:
             "to_date": to_date,
             "days": "WEEKDAY",
         }
-        return self.post_json(SERVICE_METRICS_URL, payload)
+        cache_key = (f"metrics_{from_loc}_{to_loc}_{from_date}_{to_date}"
+                     f"_{from_time}_{to_time}.json")
+        return self._cached_post(cache_key, SERVICE_METRICS_URL, payload)
 
     def fetch_service_details(self, rid: str) -> dict:
-        """POST serviceDetails for a single RID (FR2). Body is ``{"rid": rid}``."""
-        return self.post_json(SERVICE_DETAILS_URL, {"rid": rid})
+        """POST serviceDetails for a single RID (FR2). Body is ``{"rid": rid}``.
+
+        Cached per RID (NFR4): a RID already fetched is served from disk.
+        """
+        return self._cached_post(f"details_{rid}.json", SERVICE_DETAILS_URL,
+                                 {"rid": rid})
 
 
 def extract_rids(metrics_response: dict) -> list[str]:

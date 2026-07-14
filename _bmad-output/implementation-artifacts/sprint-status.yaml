@@ -63,7 +63,7 @@ development_status:
   2-1-hsp-client-auth-avg-tls-injectable-http-seam: done
   2-2-fetch-servicemetrics-and-extract-all-rids: done
   2-3-fetch-servicedetails-and-map-json-service: done
-  2-4-idempotent-on-disk-response-cache: ready-for-dev
+  2-4-idempotent-on-disk-response-cache: done
   2-5-fetch-failure-contract-per-day-status: ready-for-dev
   epic-2-retrospective: optional
 
