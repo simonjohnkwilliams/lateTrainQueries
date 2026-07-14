@@ -59,12 +59,12 @@ development_status:
   epic-1-retrospective: optional
 
   # Epic 2: Real historic data from HSP
-  epic-2: in-progress
+  epic-2: done
   2-1-hsp-client-auth-avg-tls-injectable-http-seam: done
   2-2-fetch-servicemetrics-and-extract-all-rids: done
   2-3-fetch-servicedetails-and-map-json-service: done
   2-4-idempotent-on-disk-response-cache: done
-  2-5-fetch-failure-contract-per-day-status: ready-for-dev
+  2-5-fetch-failure-contract-per-day-status: done
   epic-2-retrospective: optional
 
   # Epic 3: One-command, file-ready claims

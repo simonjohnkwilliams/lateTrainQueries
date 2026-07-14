@@ -16,11 +16,19 @@ response cache (2.4), and the per-day fetch-failure rollup (2.5). May import
 from __future__ import annotations
 
 import json
+import logging
 import os
 
 import requests
 
-from trainline.engine.models import Direction, Service
+from trainline.engine.models import (
+    Direction,
+    FetchedDay,
+    FetchStatus,
+    Service,
+)
+
+_LOG = logging.getLogger(__name__)
 
 HSP_BASE_URL = "https://hsp-prod.rockshore.net/api/v1"
 SERVICE_METRICS_URL = f"{HSP_BASE_URL}/serviceMetrics"
@@ -213,3 +221,47 @@ def map_service_details(response, origin, destination, direction, date=None):
         cancelled=cancelled,
         reason=reason,
     )
+
+
+def _fetch_leg(client, from_loc, to_loc, direction, date, window):
+    """Fetch one direction's services for one date. Raises on any failed fetch."""
+    from_time, to_time = window
+    metrics = client.fetch_service_metrics(
+        from_loc, to_loc, from_time, to_time, date, date)
+    services = []
+    for rid in extract_rids(metrics):
+        details = client.fetch_service_details(rid)
+        service = map_service_details(details, from_loc, to_loc, direction, date=date)
+        if service is not None:
+            services.append(service)
+    return tuple(services)
+
+
+def fetch_day(client, date, origin, destination, outbound_window, inbound_window):
+    """Assemble a ``FetchedDay`` for one date, both directions (FR5, AD-5).
+
+    A day's status is ``OK`` only if **every** required leg — both directions'
+    metrics and all their details — fetched successfully; any failure makes it
+    ``FETCH_FAILED`` (reported as "not analysed", never a clean no-claim). A
+    single failure is logged and the day is returned rather than raising, so a
+    multi-day run continues (FR5).
+    """
+    status = FetchStatus.OK
+    outbound = ()
+    inbound = ()
+    try:
+        outbound = _fetch_leg(client, origin, destination,
+                              Direction.OUTBOUND, date, outbound_window)
+    except Exception as exc:  # noqa: BLE001 — any fetch failure fails the leg
+        _LOG.warning("outbound fetch failed for %s %s->%s: %s",
+                     date, origin, destination, exc)
+        status = FetchStatus.FETCH_FAILED
+    try:
+        inbound = _fetch_leg(client, destination, origin,
+                             Direction.INBOUND, date, inbound_window)
+    except Exception as exc:  # noqa: BLE001
+        _LOG.warning("inbound fetch failed for %s %s->%s: %s",
+                     date, destination, origin, exc)
+        status = FetchStatus.FETCH_FAILED
+    return FetchedDay(date=date, status=status,
+                      outbound=outbound, inbound=inbound)
