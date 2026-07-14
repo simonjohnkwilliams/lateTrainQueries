@@ -69,7 +69,7 @@ development_status:
 
   # Epic 3: One-command, file-ready claims
   epic-3: in-progress
-  3-1-config-route-window-dates-credential-loading: ready-for-dev
+  3-1-config-route-window-dates-credential-loading: done
   3-2-storage-write-claims-as-csv-json-sorted: ready-for-dev
   3-3-cli-composition-root-end-to-end-run: ready-for-dev
   epic-3-retrospective: optional
