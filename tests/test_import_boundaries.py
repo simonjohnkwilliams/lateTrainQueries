@@ -81,6 +81,20 @@ def test_engine_imports_no_adapter():
 
 
 @pytest.mark.offline
+def test_adapters_import_engine_models_only():
+    # AD-2: adapters may import engine.models only — not engine.delay/optimiser.
+    offenders = {}
+    for path in _iter_py_files(ADAPTERS_DIR):
+        bad = {
+            m for m in _imported_module_paths(path)
+            if "engine" in m and "engine.models" not in m and not m.endswith("engine")
+        }
+        if bad:
+            offenders[os.path.relpath(path, PKG_ROOT)] = sorted(bad)
+    assert not offenders, f"adapter imports engine internals beyond models: {offenders}"
+
+
+@pytest.mark.offline
 def test_no_adapter_imports_another_adapter():
     offenders = {}
     for path in _iter_py_files(ADAPTERS_DIR):

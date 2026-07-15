@@ -16,10 +16,12 @@ response cache (2.4), and the per-day fetch-failure rollup (2.5). May import
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import logging
 import os
 
 import requests
+from requests.exceptions import SSLError
 
 from trainline.engine.models import (
     Direction,
@@ -34,16 +36,49 @@ HSP_BASE_URL = "https://hsp-prod.rockshore.net/api/v1"
 SERVICE_METRICS_URL = f"{HSP_BASE_URL}/serviceMetrics"
 SERVICE_DETAILS_URL = f"{HSP_BASE_URL}/serviceDetails"
 
+DEFAULT_CA_BUNDLE = Path("creds") / "ca-bundle.pem"
+
+
+def default_ca_bundle_path() -> str | None:
+    """Project-local AVG/CA bundle if present (``creds/ca-bundle.pem``)."""
+    if DEFAULT_CA_BUNDLE.is_file():
+        return str(DEFAULT_CA_BUNDLE.resolve())
+    return None
+
+
+def resolve_tls_verify(prefer_ca_bundle: bool = True):
+    """Choose TLS verify setting for ``requests`` (NFR3).
+
+    Priority:
+      1. Explicit ``REQUESTS_CA_BUNDLE`` env var
+      2. Local ``creds/ca-bundle.pem`` when present (AVG-friendly default)
+      3. ``True`` — system/certifi trust store
+    """
+    env = os.environ.get("REQUESTS_CA_BUNDLE")
+    if env:
+        return env
+    if prefer_ca_bundle:
+        local = default_ca_bundle_path()
+        if local:
+            return local
+    return True
+
+
+
 
 class HspClient:
     """Authenticated HSP HTTP client over an injectable transport."""
 
     def __init__(self, username: str, password: str, session=None,
-                 cache_dir=None, force_refresh: bool = False):
+                 cache_dir=None, force_refresh: bool = False,
+                 service_metrics_url: str | None = None,
+                 service_details_url: str | None = None):
         self._auth = (username, password)
         self._session = session if session is not None else requests.Session()
         self._cache_dir = cache_dir  # None disables caching
         self._force_refresh = force_refresh
+        self.service_metrics_url = service_metrics_url or SERVICE_METRICS_URL
+        self.service_details_url = service_details_url or SERVICE_DETAILS_URL
 
     def clear_cache(self) -> None:
         """Remove all cached responses (the FR4 force-refresh mechanism)."""
@@ -61,12 +96,17 @@ class HspClient:
         ``post_json`` raises before any write, so a failed fetch is never
         persisted as a success (supports the AD-5 fetch-failure contract).
         """
+        label = "serviceDetails" if "serviceDetails" in url else (
+            "serviceMetrics" if "serviceMetrics" in url else url)
         if not self._cache_dir:
+            _LOG.info("HTTP POST %s -> %s", label, cache_key)
             return self.post_json(url, payload)
         path = os.path.join(self._cache_dir, cache_key)
         if not self._force_refresh and os.path.isfile(path):
+            _LOG.info("cache HIT  %s", cache_key)
             with open(path, encoding="utf-8") as fh:
                 return json.load(fh)
+        _LOG.info("HTTP POST %s -> %s", label, cache_key)
         data = self.post_json(url, payload)
         os.makedirs(self._cache_dir, exist_ok=True)
         with open(path, "w", encoding="utf-8") as fh:
@@ -76,12 +116,38 @@ class HspClient:
     def post_json(self, url: str, payload: dict) -> dict:
         """POST ``payload`` as JSON with basic auth; return the parsed body.
 
-        Honours ``REQUESTS_CA_BUNDLE`` (NFR3) and never disables TLS verification.
+        TLS trust (NFR3), never ``verify=False``:
+          - uses ``REQUESTS_CA_BUNDLE`` if set;
+          - else auto-uses ``creds/ca-bundle.pem`` when that file exists (AVG);
+          - on ``SSLError``, retries once with the alternate trust mode.
         """
-        kwargs = {"json": payload, "auth": self._auth}
-        ca_bundle = os.environ.get("REQUESTS_CA_BUNDLE")
-        if ca_bundle:
-            kwargs["verify"] = ca_bundle
+        primary = resolve_tls_verify(prefer_ca_bundle=True)
+        try:
+            return self._post_json_once(url, payload, primary)
+        except SSLError as exc:
+            # Prefer CA bundle → fall back to system trust; or the reverse.
+            local = default_ca_bundle_path()
+            if primary is True:
+                fallback = local
+            elif local and primary == local:
+                fallback = True
+            elif os.environ.get("REQUESTS_CA_BUNDLE") and primary == os.environ.get(
+                    "REQUESTS_CA_BUNDLE"):
+                # Env-forced bundle failed — try system trust once.
+                fallback = True
+            else:
+                fallback = True if primary != True else local
+            if fallback is None or fallback == primary:
+                raise
+            _LOG.warning(
+                "TLS verify failed (%s); retrying with verify=%s",
+                type(exc).__name__, fallback,
+            )
+            return self._post_json_once(url, payload, fallback)
+
+    def _post_json_once(self, url: str, payload: dict, verify) -> dict:
+        kwargs = {"json": payload, "auth": self._auth, "verify": verify}
+        _LOG.info("TLS verify=%s", verify if verify is not True else "system")
         response = self._session.post(url, **kwargs)
         response.raise_for_status()
         return response.json()
@@ -105,14 +171,14 @@ class HspClient:
         }
         cache_key = (f"metrics_{from_loc}_{to_loc}_{from_date}_{to_date}"
                      f"_{from_time}_{to_time}.json")
-        return self._cached_post(cache_key, SERVICE_METRICS_URL, payload)
+        return self._cached_post(cache_key, self.service_metrics_url, payload)
 
     def fetch_service_details(self, rid: str) -> dict:
         """POST serviceDetails for a single RID (FR2). Body is ``{"rid": rid}``.
 
         Cached per RID (NFR4): a RID already fetched is served from disk.
         """
-        return self._cached_post(f"details_{rid}.json", SERVICE_DETAILS_URL,
+        return self._cached_post(f"details_{rid}.json", self.service_details_url,
                                  {"rid": rid})
 
 
@@ -226,10 +292,17 @@ def map_service_details(response, origin, destination, direction, date=None):
 def _fetch_leg(client, from_loc, to_loc, direction, date, window):
     """Fetch one direction's services for one date. Raises on any failed fetch."""
     from_time, to_time = window
+    _LOG.info(
+        "Fetching metrics %s %s->%s window %s-%s",
+        date, from_loc, to_loc, from_time, to_time,
+    )
     metrics = client.fetch_service_metrics(
         from_loc, to_loc, from_time, to_time, date, date)
+    rids = extract_rids(metrics)
+    _LOG.info("  %d RID(s) for %s %s->%s", len(rids), date, from_loc, to_loc)
     services = []
-    for rid in extract_rids(metrics):
+    for i, rid in enumerate(rids, start=1):
+        _LOG.info("  details %d/%d rid=%s", i, len(rids), rid)
         details = client.fetch_service_details(rid)
         service = map_service_details(details, from_loc, to_loc, direction, date=date)
         if service is not None:

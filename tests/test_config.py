@@ -54,7 +54,8 @@ def test_unknown_override_raises():
 def test_optimiser_flags_present_on_config():
     cfg = default_config()
     assert cfg.per_day_cap is None
-    assert cfg.enable_cancellation_fallback is False
+    # OQ1 resolved: production config enables the cancellation fallback (AD-6).
+    assert cfg.enable_cancellation_fallback is True
 
 
 # --- FR17 credential loading ------------------------------------------------
@@ -107,3 +108,74 @@ def test_malformed_file_missing_keys(tmp_path):
     path = _write_creds(tmp_path, "[configuration]\nusername=alice\n")
     with pytest.raises(CredentialsError):
         load_credentials(path)
+
+
+@pytest.mark.offline
+def test_loads_credentials_ignoring_trailing_non_ini_notes(tmp_path, monkeypatch):
+    path = str(tmp_path / "trainConfig.txt")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("[configuration]\nusername=alice\npassword=hunter2\n")
+        fh.write("Fares documentation\nhttps://example.invalid/docs\n")
+        fh.write("https://example.invalid/other\n")
+    monkeypatch.setenv("HSP_CREDENTIALS_FILE", path)
+    assert load_credentials() == ("alice", "hunter2")
+
+
+SAMPLE_MULTI = """[configuration]
+username=portal@example.com
+password=portal-secret
+## Fares, Routeing Guide and Timetable data - API Information ##
+Fares=https://opendata.nationalrail.co.uk/api/staticfeeds/2.0/fares
+Documentation=https://wiki.openraildata.com/index.php/DTD
+## Darwin FTP Information ##
+Hostname=darwin-dist.example
+Username=ftpuser
+Password=ftp-secret
+Documentation=https://wiki.openraildata.com/index.php/Darwin:Push_Port
+## Historical Service Performance (HSP) - API Information ##
+Service Details URL=https://hsp-prod.rockshore.net/api/v1/serviceDetails
+Service Metrics URL=https://hsp-prod.rockshore.net/api/v1/serviceMetrics
+Documentation=https://wiki.openraildata.com/index.php/HSP
+"""
+
+
+@pytest.mark.offline
+def test_hsp_uses_portal_not_darwin_ftp_credentials(tmp_path):
+    from trainline.adapters.config import load_hsp_credentials
+    path = _write_creds(tmp_path, SAMPLE_MULTI)
+    creds = load_hsp_credentials(path)
+    assert creds.username == "portal@example.com"
+    assert creds.password == "portal-secret"
+    assert creds.username != "ftpuser"
+    assert creds.service_metrics_url.endswith("/serviceMetrics")
+    assert creds.service_details_url.endswith("/serviceDetails")
+    assert creds.source == "configuration"
+
+
+@pytest.mark.offline
+def test_hsp_section_username_preferred_when_present(tmp_path):
+    from trainline.adapters.config import load_hsp_credentials
+    body = """[configuration]
+username=portal@example.com
+password=portal-secret
+## Historical Service Performance (HSP) - API Information ##
+Username=hsp-user@example.com
+Password=hsp-only-secret
+Service Details URL=https://hsp-prod.rockshore.net/api/v1/serviceDetails
+Service Metrics URL=https://hsp-prod.rockshore.net/api/v1/serviceMetrics
+"""
+    path = _write_creds(tmp_path, body)
+    creds = load_hsp_credentials(path)
+    assert creds.username == "hsp-user@example.com"
+    assert creds.password == "hsp-only-secret"
+    assert "Historical Service Performance" in creds.source
+
+
+@pytest.mark.offline
+def test_parse_credentials_file_sections(tmp_path):
+    from trainline.adapters.config import parse_credentials_file
+    path = _write_creds(tmp_path, SAMPLE_MULTI)
+    sections = parse_credentials_file(path)
+    assert "configuration" in sections
+    assert any("Darwin FTP" in k for k in sections)
+    assert any("Historical Service Performance" in k for k in sections)

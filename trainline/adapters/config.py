@@ -8,17 +8,41 @@ a run fetches the lookback in chunks without over-pulling the HSP API.
 Credentials are read only from the file at ``HSP_CREDENTIALS_FILE`` (FR17) and
 never live in the repo. Config carries no secrets, so it is safe to log.
 
-May import ``engine.models`` only within the package (AD-2); it imports no other
-adapter.
+The credentials file may contain several Open Rail Data products (DTD, KB,
+Darwin, HSP). Each product has its own auth model — see ``CREDENTIAL_MAP`` and
+``load_hsp_credentials``. May import ``engine.models`` only (AD-2).
 """
 from __future__ import annotations
 
-import configparser
 import dataclasses
 import os
+import re
 from dataclasses import dataclass
 
 FULL_DAY = ("0000", "2359")
+
+# Which file section supplies auth for which product (Open Rail Data wiki).
+# HSP: portal email/password via HTTP Basic Auth (wiki.openraildata.com/HSP).
+# DTD/KB staticfeeds: same portal login, then X-Auth-Token from /authenticate.
+# Darwin Push Port / KB realtime: product-specific Username/Password in-section.
+CREDENTIAL_MAP = {
+    "nrdp_portal": "[configuration] username/password — National Rail Data Portal",
+    "dtd": "NRDP portal (+ X-Auth-Token); DTD section is feed URLs only",
+    "kb_api": "NRDP portal (+ X-Auth-Token); KB API section is feed URLs only",
+    "kb_realtime": "## Knowledgebase (KB) Real Time Incidents ## Username/Password",
+    "darwin_s3": "## Darwin File Information ## Access Key / Secret Key",
+    "darwin_ftp": "## Darwin FTP Information ## Username/Password",
+    "darwin_sftp": "## Darwin SFTP Information ## Username/Password",
+    "darwin_topic": "## Darwin Topic Information ## Username/Password",
+    "hsp": (
+        "## Historical Service Performance (HSP) ## Username/Password if present, "
+        "else [configuration] portal username/password (HTTP Basic Auth)"
+    ),
+}
+
+_SECTION_HEADER = re.compile(r"^##\s*(.+?)\s*##\s*$")
+_DEFAULT_METRICS_URL = "https://hsp-prod.rockshore.net/api/v1/serviceMetrics"
+_DEFAULT_DETAILS_URL = "https://hsp-prod.rockshore.net/api/v1/serviceDetails"
 
 
 @dataclass(frozen=True)
@@ -31,7 +55,23 @@ class RunConfig:
     to_date: str | None = None  # ISO end date; None => resolved at run time
     batch_size: int = 3  # days fetched per run chunk (HSP politeness)
     per_day_cap: float | None = None  # OQ2 stacking cap; None = uncapped
-    enable_cancellation_fallback: bool = False  # AD-6 gate; off until OQ1
+    # AD-6 gate. OQ1 is now resolved (real cancelled-train fixtures exist under
+    # tests/fixtures/recorded_details_cancelled_*.json), so production runs
+    # include next-catchable cancellation claims by default. The pure optimiser
+    # keeps its own default OFF (see engine.optimiser) so a bare optimise(days)
+    # call is unchanged; only a real RunConfig turns it on.
+    enable_cancellation_fallback: bool = True
+
+
+@dataclass(frozen=True)
+class HspCredentials:
+    """Auth + endpoint URLs for the HSP API only (never Darwin/KB secrets)."""
+
+    username: str
+    password: str
+    service_metrics_url: str = _DEFAULT_METRICS_URL
+    service_details_url: str = _DEFAULT_DETAILS_URL
+    source: str = "configuration"  # which section supplied username/password
 
 
 def default_config() -> RunConfig:
@@ -40,12 +80,7 @@ def default_config() -> RunConfig:
 
 
 def make_config(**overrides) -> RunConfig:
-    """A ``RunConfig`` with ``overrides`` applied over the defaults (FR16).
-
-    Changing route/window/date needs no code edit — everything flows through
-    here. Unknown field names raise, surfacing typos rather than silently
-    ignoring them (unlike the old getJson positional-arg gap).
-    """
+    """A ``RunConfig`` with ``overrides`` applied over the defaults (FR16)."""
     valid = {f.name for f in dataclasses.fields(RunConfig)}
     unknown = set(overrides) - valid
     if unknown:
@@ -57,35 +92,121 @@ class CredentialsError(Exception):
     """Raised when HSP credentials cannot be loaded (missing/malformed file)."""
 
 
-def load_credentials(path: str | None = None) -> tuple[str, str]:
-    """Load ``(username, password)`` from the HSP credentials file (FR17).
-
-    Path comes from the ``path`` argument or ``HSP_CREDENTIALS_FILE``. A missing
-    env var, missing file, or malformed contents raise ``CredentialsError`` with
-    a clear message. The file itself never lives in the repo.
-    """
+def _credentials_path(path: str | None) -> str:
     path = path or os.environ.get("HSP_CREDENTIALS_FILE")
     if not path:
         raise CredentialsError(
             "HSP_CREDENTIALS_FILE is not set — point it at your HSP credentials file")
     if not os.path.isfile(path):
         raise CredentialsError(f"HSP credentials file not found: {path}")
+    return path
 
-    parser = configparser.ConfigParser()
+
+def parse_credentials_file(path: str | None = None) -> dict[str, dict[str, str]]:
+    """Parse the multi-section credentials file into ``{section: {key: value}}``.
+
+    Recognises ``[ini_sections]`` and ``## Markdown-style headers ##``. Keys are
+    lowercased; values keep their original spelling. Lines without ``=`` are
+    ignored (so free-form notes do not break parsing).
+    """
+    path = _credentials_path(path)
+    sections: dict[str, dict[str, str]] = {}
+    current: str | None = None
     try:
-        parser.read(path)
-    except configparser.Error as exc:
+        with open(path, encoding="utf-8") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line or line.startswith(";") or line.startswith("#") and not line.startswith("##"):
+                    continue
+                header = _SECTION_HEADER.match(line)
+                if header:
+                    current = header.group(1).strip()
+                    sections.setdefault(current, {})
+                    continue
+                if line.startswith("[") and line.endswith("]"):
+                    current = line[1:-1].strip()
+                    sections.setdefault(current, {})
+                    continue
+                if current is None or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                sections[current][key.strip().lower()] = value.strip()
+    except OSError as exc:
+        raise CredentialsError(f"cannot read HSP credentials file: {path}") from exc
+    return sections
+
+
+def _find_section(sections: dict[str, dict[str, str]], *needles: str) -> tuple[str, dict[str, str]] | None:
+    """Return ``(section_name, values)`` whose title contains all needles (casefold)."""
+    wanted = [n.casefold() for n in needles]
+    for name, values in sections.items():
+        hay = name.casefold()
+        if all(n in hay for n in wanted):
+            return name, values
+    return None
+
+
+def _user_pass(values: dict[str, str]) -> tuple[str, str] | None:
+    user = values.get("username")
+    password = values.get("password")
+    if user and password:
+        return user, password
+    return None
+
+
+def load_hsp_credentials(path: str | None = None) -> HspCredentials:
+    """Load HSP-only credentials and endpoint URLs (FR17).
+
+    Preference order for username/password:
+      1. The ``## Historical Service Performance (HSP) ... ##`` section, if it
+         defines Username/Password.
+      2. The ``[configuration]`` National Rail Data Portal username/password.
+
+    Never uses Darwin FTP/SFTP/Topic or KB realtime usernames for HSP — those
+    products have separate credentials per the Open Rail Data wiki.
+    """
+    sections = parse_credentials_file(path)
+    hsp = _find_section(sections, "historical service performance") or _find_section(
+        sections, "hsp")
+    metrics_url = _DEFAULT_METRICS_URL
+    details_url = _DEFAULT_DETAILS_URL
+    source = "configuration"
+    pair: tuple[str, str] | None = None
+
+    if hsp is not None:
+        name, values = hsp
+        metrics_url = values.get("service metrics url", metrics_url)
+        details_url = values.get("service details url", details_url)
+        pair = _user_pass(values)
+        if pair:
+            source = name
+
+    if pair is None:
+        config_values = sections.get("configuration") or {}
+        pair = _user_pass(config_values)
+        source = "configuration"
+
+    if pair is None:
         raise CredentialsError(
-            f"{path} is malformed — expected a [configuration] section: {exc}"
-        ) from exc
-    if not parser.has_section("configuration"):
-        raise CredentialsError(f"{path} is missing a [configuration] section")
-    try:
-        username = parser.get("configuration", "username")
-        password = parser.get("configuration", "password")
-    except configparser.NoOptionError as exc:
-        raise CredentialsError(
-            f"{path} must contain username= and password= keys") from exc
-    if not username or not password:
-        raise CredentialsError(f"{path} has an empty username or password")
-    return username, password
+            "HSP credentials not found: set username=/password= under "
+            "[configuration] (National Rail Data Portal login) or under the "
+            "## Historical Service Performance (HSP) ## section. "
+            "Do not use Darwin/KB usernames for HSP."
+        )
+    username, password = pair
+    return HspCredentials(
+        username=username,
+        password=password,
+        service_metrics_url=metrics_url,
+        service_details_url=details_url,
+        source=source,
+    )
+
+
+def load_credentials(path: str | None = None) -> tuple[str, str]:
+    """Load ``(username, password)`` for HSP HTTP Basic Auth (FR17).
+
+    Compatibility wrapper around ``load_hsp_credentials``.
+    """
+    creds = load_hsp_credentials(path)
+    return creds.username, creds.password

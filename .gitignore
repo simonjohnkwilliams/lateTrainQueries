@@ -15,3 +15,6 @@ __pycache__/
 # IDE
 .idea/workspace.xml
 .idea/copilot.data.migration.agent.xml
+
+# CLI claim output
+Results/

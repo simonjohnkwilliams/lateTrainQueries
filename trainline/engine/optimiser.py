@@ -6,9 +6,11 @@ outbound and one inbound claim that maximises total payout, subject to
 feasibility, and breaks ties deterministically. Emits 0, 1, or 2 claims per day.
 
 Cancellation fallback (AD-6, FR12) is a gated path: OFF unless
-``config.enable_cancellation_fallback`` is true, and it stays off in production
-until a real cancelled-train fixture resolves OQ1. When on, an actual late train
-always takes precedence over a cancellation-derived claim **for the same leg**.
+``config.enable_cancellation_fallback`` is true. OQ1 is now resolved (real
+cancelled-train fixtures exist), so ``RunConfig`` enables it by default; this
+function keeps its own default OFF so a bare ``optimise(days)`` is unchanged.
+When on, an actual late train always takes precedence over a cancellation-derived
+claim **for the same leg**.
 """
 from __future__ import annotations
 
