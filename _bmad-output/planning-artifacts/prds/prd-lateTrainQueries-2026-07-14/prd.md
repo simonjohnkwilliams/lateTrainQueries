@@ -158,7 +158,8 @@ FRs are grouped by capability. IDs are stable and globally numbered.
   where "next catchable" is the earliest service departing at/after the cancelled
   train's scheduled departure that actually ran. Actual late trains always take
   precedence over cancellation-derived claims.
-  _Blocked on OQ1 (no HSP cancellation flag, no fixture) — see §9._
+  _OQ1 resolved (2026-07-15): real cancelled-service fixtures captured; fallback
+  enabled by default, opt out with `--no-cancellations` — see §9._
 
 ### 5.4 Claim output
 
@@ -244,14 +245,19 @@ provisioning or Terraform. The seams/technical-how detail lives in
 6. Season-ticket support (different band track; data model already allows it per
    FR18).
 
-**Cancellation fallback (FR12)** is MVP-adjacent but gated on OQ1.
+**Cancellation fallback (FR12)** — OQ1 resolved (2026-07-15); enabled by default.
 
 ## 9. Open Questions & Assumptions
 
-- **OQ1 (blocks FR12).** HSP exposes no cancellation flag — only free-text
-  `late_canc_reason` and empty `actual_ta`/`actual_td` — and no recorded fixture
-  contains a cancelled train. Capture a real cancelled-service fixture before
-  implementing the fallback, to pin down the JSON shape.
+- **OQ1 — RESOLVED (2026-07-15).** HSP exposes no cancellation flag — a cancelled
+  service is signalled by empty `actual_ta`/`actual_td` at every calling point
+  plus a `late_canc_reason` code. Real cancelled-service fixtures are now captured
+  (`tests/fixtures/recorded_details_cancelled_*.json`, e.g. the 2026-07-10 18:30
+  Waterloo→Portsmouth Harbour, `late_canc_reason` "911"). `map_service_details`
+  maps this shape to `Service.cancelled=True`, and the AD-6 fallback is validated
+  against it by `tests/test_cancellation_recorded.py`. FR12 is therefore
+  **enabled by default** in `RunConfig`; the CLI `--no-cancellations` flag opts
+  out. Actual-late trains still take precedence over cancellation-derived claims.
 - **OQ2 (owner: Simon; revisit: next real filing).** Three linked open points on
   the payout model, none blocking MVP structure but all affecting the numbers:
   (a) the open-day-return band track (12.5 / 25 / 50 / 100%) is derived from

@@ -166,5 +166,5 @@ graph LR
 
 - **Infra / deployment / AWS / Terraform** — out of scope by the roadmap; no provisioning until the automation that needs it exists.
 - **Roadmap adapters** (email digest, SWR auto-filing, ticket ingest, Lambda handler) — added later as new adapters + composition roots behind the same boundaries (AD-1, AD-8); no port shapes fixed now beyond the pure-core contract.
-- **OQ1 — cancellation JSON shape** — the AD-6 flag stays off until a real cancelled-train fixture pins the shape.
+- **OQ1 — cancellation JSON shape — RESOLVED (2026-07-15).** A cancelled service is empty `actual_ta`/`actual_td` at every calling point + a `late_canc_reason` code; real fixtures captured (`tests/fixtures/recorded_details_cancelled_*.json`). The AD-6 flag is now **on by default** in `RunConfig` (CLI `--no-cancellations` opts out); validated by `tests/test_cancellation_recorded.py`.
 - **OQ2 — payout base & claim stacking** — pre-provisioned, not fully deferrable: `engine.delay.payout` takes ticket-type parameters and `engine.optimiser`'s objective accepts an optional per-day cap (AD-10, AD-11). So the *single-vs-return base* is a data change, but if SWR **caps** stacked claims the objective flips from `max Σ` to `max min(Σ, cap)` — that path exists in the signature now; resolving OQ2 sets the cap value rather than restructuring the optimiser.
