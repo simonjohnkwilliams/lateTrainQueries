@@ -70,3 +70,23 @@ def test_load_ticket_form_defaults_from_section(tmp_path, monkeypatch):
     loaded = load_ticket_form_defaults(credentials_path=str(creds))
     assert loaded.ticket_price == "18.40"
     assert loaded.ticket_reference == "98765"
+
+
+@pytest.mark.offline
+def test_load_ticket_form_defaults_from_section(tmp_path, monkeypatch):
+    from trainline.adapters.config import load_ticket_form_defaults
+
+    monkeypatch.delenv("SWR_TICKET_PRICE", raising=False)
+    monkeypatch.delenv("SWR_TICKET_REFERENCE", raising=False)
+    creds = tmp_path / "trainConfig.txt"
+    creds.write_text(
+        "## SWR Delay Repay ##\n"
+        "swr_username=user@example.com\n"
+        "swr_password=secret\n"
+        "ticket_price=18.40\n"
+        "ticket_reference=98765\n",
+        encoding="utf-8",
+    )
+    loaded = load_ticket_form_defaults(credentials_path=str(creds))
+    assert loaded.ticket_price == "18.40"
+    assert loaded.ticket_reference == "98765"

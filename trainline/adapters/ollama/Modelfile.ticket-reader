@@ -41,6 +41,8 @@ Critical date rules:
 Other rules:
 - Read text even if the photo is rotated 90/180 degrees.
 - Extract whatever origin/destination you see (Godalming, London Terminals, London Zones 1-6, Waterloo, Guildford, Chesterfield, etc.).
+- price: fare as printed (e.g. "12.50" or "£12.50"). Prefer digits + decimal only.
+- ticket_number: ticket number / collection / booking reference as printed (often 5+ digits). Not the barcode payload if a clear number is printed.
 - If TWO distinct tickets are visible in the frame (two borders / two barcodes / stacked tickets), set multiple_tickets true. Still fill fields for the clearest ticket.
 - If a critical field is unreadable, use null and list the issue in quality_issues.
 
@@ -57,6 +59,8 @@ JSON schema:
   "date_of_travel_print": "string|null",
   "start_print": "string|null",
   "until_print": "string|null",
+  "price": "string|null",
+  "ticket_number": "string|null",
   "multiple_tickets": false,
   "readable": true,
   "quality_issues": []

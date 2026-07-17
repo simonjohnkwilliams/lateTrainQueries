@@ -21,6 +21,53 @@ _TICKET_NAME = re.compile(
 )
 
 
+def ticket_meta_path(ticket_path: Path) -> Path:
+    """Sidecar JSON next to a ready/claimed ticket photo."""
+    path = Path(ticket_path)
+    return path.with_name(f"{path.stem}.meta.json")
+
+
+def load_ticket_meta(ticket_path: Path) -> dict[str, str]:
+    """Load OCR-extracted ticket_price / ticket_reference from sidecar."""
+    path = ticket_meta_path(Path(ticket_path))
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, str] = {}
+    price = data.get("ticket_price")
+    ref = data.get("ticket_reference")
+    if price:
+        out["ticket_price"] = str(price).strip()
+    if ref:
+        out["ticket_reference"] = str(ref).strip()
+    return out
+
+
+def write_ticket_meta(
+    ticket_path: Path,
+    *,
+    ticket_price: str | None = None,
+    ticket_reference: str | None = None,
+) -> Path | None:
+    """Write sidecar JSON for OCR fare/ref; skip if both empty."""
+    meta: dict[str, str] = {}
+    if ticket_price:
+        meta["ticket_price"] = str(ticket_price).strip()
+    if ticket_reference:
+        meta["ticket_reference"] = str(ticket_reference).strip()
+    if not meta:
+        return None
+    path = ticket_meta_path(Path(ticket_path))
+    path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+
 @dataclass(frozen=True)
 class TicketFile:
     path: Path
@@ -236,4 +283,10 @@ def move_to_claimed(ticket_path: Path, claimed_dir: str | Path) -> Path:
         stem, ext = ticket_path.stem, ticket_path.suffix
         dest = dest_dir / f"{stem}-dup{ext}"
     shutil.move(str(ticket_path), str(dest))
+    meta = ticket_meta_path(ticket_path)
+    if meta.is_file():
+        meta_dest = dest_dir / meta.name
+        if meta_dest.exists():
+            meta_dest = dest_dir / f"{meta.stem}-dup.json"
+        shutil.move(str(meta), str(meta_dest))
     return dest

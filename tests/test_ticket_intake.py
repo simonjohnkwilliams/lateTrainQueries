@@ -260,7 +260,10 @@ def test_classify_ready_reject_unreadable_route(tmp_path):
 
     ocr = FakeOcrEngine({
         "good.jpg": OcrResult(
-            "Godalming London Waterloo 16/07/2024 Ticket AB12CD", 80.0),
+            "Godalming London Waterloo 16/07/2024 "
+            "Price 28.90 Ticket number 54321",
+            80.0,
+        ),
         "badroute.jpg": OcrResult(
             "Guildford Burgess Hill 16/07/2024", 80.0),
         "blank.jpg": OcrResult("", 0.0),
@@ -270,9 +273,15 @@ def test_classify_ready_reject_unreadable_route(tmp_path):
     assert summary.ready == 1
     assert summary.rejected == 2
     assert list(layout.unclassified.iterdir()) == []
-    ready = list(layout.ready_to_claim.iterdir())
+    ready = [p for p in layout.ready_to_claim.iterdir() if p.suffix.casefold() != ".json"]
     assert len(ready) == 1
     assert ready[0].name.startswith("07-16-")
+    meta = ready[0].with_name(ready[0].stem + ".meta.json")
+    assert meta.is_file()
+    import json
+    data = json.loads(meta.read_text(encoding="utf-8"))
+    assert data["ticket_price"] == "28.90"
+    assert data["ticket_reference"] == "54321"
     rejected = {p.name for p in layout.rejected.iterdir() if p.is_file()}
     assert any(n.startswith("Not_valid_Route-") for n in rejected)
     assert any(n.startswith("unreadable-") for n in rejected)

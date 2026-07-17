@@ -26,6 +26,7 @@ _EXTRACT_PROMPT = (
     "Decide document_type first (sales_voucher / receipt / journey_ticket). "
     "If it is a 7-day Travelcard, set ticket_kind=travelcard_7day with start_date AND "
     "valid_until; leave date_of_travel null. "
+    "Always extract price and ticket_number when printed on a journey ticket. "
     "If two tickets are in frame, multiple_tickets=true. "
     "Return ONLY the JSON object."
 )
@@ -170,6 +171,32 @@ class _OcrLike:
     confidence: float
 
 
+def _clean_price_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.casefold() in {"null", "none", "unknown"}:
+        return None
+    match = re.search(r"(\d+)[.,](\d{2})", text)
+    if match:
+        return f"{match.group(1)}.{match.group(2)}"
+    match = re.search(r"(\d{1,4})", text)
+    return match.group(1) if match else None
+
+
+def _clean_ticket_number_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.casefold() in {"null", "none", "unknown"}:
+        return None
+    match = re.search(r"(\d{5,})", text)
+    if match:
+        return match.group(1)
+    cleaned = re.sub(r"[^A-Za-z0-9-]", "", text)
+    return cleaned[:24] or None
+
+
 @dataclass(frozen=True)
 class TicketVisionFields:
     """Structured fields from the vision model (before parser transcript)."""
@@ -182,6 +209,8 @@ class TicketVisionFields:
     start_date: str | None
     valid_until: str | None
     ticket_kind: str | None
+    price: str | None
+    ticket_number: str | None
     multiple_tickets: bool
     readable: bool
     quality_issues: tuple[str, ...]
@@ -206,6 +235,8 @@ class TicketVisionFields:
             start_date=_s("start_date"),
             valid_until=_s("valid_until"),
             ticket_kind=kind,
+            price=_clean_price_text(data.get("price")),
+            ticket_number=_clean_ticket_number_text(data.get("ticket_number")),
             multiple_tickets=bool(data.get("multiple_tickets")),
             readable=bool(data.get("readable", True)),
             quality_issues=tuple(str(x) for x in issues),
@@ -229,6 +260,11 @@ def vision_fields_to_transcript(fields: TicketVisionFields) -> str:
     origin = fields.origin or "UNKNOWN"
     dest = fields.destination or "UNKNOWN"
     kind = (fields.ticket_kind or "").casefold()
+    extras = ""
+    if fields.price:
+        extras += f" Price {fields.price}"
+    if fields.ticket_number:
+        extras += f" Ticket number {fields.ticket_number}"
 
     if "travelcard_7day" in kind or "7day" in kind or "7_day" in kind:
         start = fields.start_date or fields.date_of_travel or "unknown"
@@ -236,6 +272,7 @@ def vision_fields_to_transcript(fields: TicketVisionFields) -> str:
         return (
             f"Travelcard STD TRVLCD-00M07D Start date {start} "
             f"Valid until {until} {origin.upper()} * & {dest.upper()} ANY PERMITTED"
+            f"{extras}"
         )
 
     if "travelcard" in kind or "day_tc" in kind:
@@ -243,14 +280,14 @@ def vision_fields_to_transcript(fields: TicketVisionFields) -> str:
         return (
             f"Day Travelcard STD ANYTIME DAY TC Start date {day} "
             f"Valid until {day} {origin.upper()} * & {dest.upper()} ANY PERMITTED"
+            f"{extras}"
         )
 
     day = fields.date_of_travel or fields.start_date or "unknown"
     return (
         f"Valid for one journey from {origin} to {dest} "
-        f"Date of travel {day} Adult Standard Class"
+        f"Date of travel {day} Adult Standard Class{extras}"
     )
-
 
 def parse_vision_json(content: str) -> dict[str, Any]:
     """Extract a JSON object from model output (tolerates markdown fences)."""

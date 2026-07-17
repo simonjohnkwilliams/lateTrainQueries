@@ -8,6 +8,7 @@ May import ``engine.models`` only (AD-2) — currently none required.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import shutil
 import statistics
@@ -758,6 +759,62 @@ def ticket_id_from_text_or_hash(text: str, path: Path) -> str:
     return _file_hash(path)
 
 
+_PRICE_RE = re.compile(
+    r"(?:Price|Fare|Amount)\s*[:\s]*£?\s*(\d+[.,]\d{2})",
+    re.IGNORECASE,
+)
+_PRICE_RE_BARE = re.compile(r"£\s*(\d+[.,]\d{2})")
+_TICKET_REF_RE = re.compile(
+    r"(?:Ticket\s*(?:number|no\.?|#)|booking\s*reference|"
+    r"collection\s*(?:ref(?:erence)?|number)?)\s*[:\s]*([A-Za-z0-9-]{5,})",
+    re.IGNORECASE,
+)
+
+
+def parse_ticket_price(text: str) -> str | None:
+    """Extract fare from OCR transcript (e.g. ``Price 12.50`` or ``£12.50``)."""
+    for pat in (_PRICE_RE, _PRICE_RE_BARE):
+        match = pat.search(text or "")
+        if match:
+            return match.group(1).replace(",", ".")
+    return None
+
+
+def parse_ticket_reference(text: str) -> str | None:
+    """Extract ticket number / booking reference from OCR transcript."""
+    match = _TICKET_REF_RE.search(text or "")
+    if not match:
+        return None
+    token = match.group(1).strip()
+    digits = re.search(r"(\d{5,})", token)
+    if digits:
+        return digits.group(1)
+    cleaned = re.sub(r"[^A-Za-z0-9-]", "", token)
+    return cleaned[:24] or None
+
+
+def _ticket_meta_path(ticket_path: Path) -> Path:
+    path = Path(ticket_path)
+    return path.with_name(f"{path.stem}.meta.json")
+
+
+def _write_ready_ticket_meta(ticket_path: Path, text: str) -> None:
+    """Persist OCR fare/ref beside a ready ticket (sidecar ``*.meta.json``)."""
+    price = parse_ticket_price(text)
+    reference = parse_ticket_reference(text)
+    meta: dict[str, str] = {}
+    if price:
+        meta["ticket_price"] = price
+    if reference:
+        meta["ticket_reference"] = reference
+    if not meta:
+        return
+    _ticket_meta_path(ticket_path).write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
 def _file_hash(path: Path) -> str:
     h = hashlib.sha1()
     with open(path, "rb") as fh:
@@ -930,6 +987,10 @@ def _classify_one(
         return item
 
     ticket_id = ticket_id_from_text_or_hash(result.text, path)
+    # Prefer a clear 5+ digit ticket number from OCR for the ready filename.
+    ocr_ref = parse_ticket_reference(result.text)
+    if ocr_ref and ocr_ref.isdigit() and len(ocr_ref) >= 5:
+        ticket_id = ocr_ref
     dest_name = ready_filename(journey, ticket_id, path.suffix)
     dest = layout.ready_to_claim / dest_name
     # Avoid clobbering an existing ready file
@@ -937,4 +998,5 @@ def _classify_one(
         dest = layout.ready_to_claim / ready_filename(
             journey, f"{ticket_id}-{_file_hash(path)[:4]}", path.suffix)
     shutil.move(str(path), str(dest))
+    _write_ready_ticket_meta(dest, result.text)
     return ClassifyItem(path, dest, "ready", dest_name)

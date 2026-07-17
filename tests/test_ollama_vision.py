@@ -68,11 +68,15 @@ def test_vision_fields_to_transcript_day_return_and_weekly():
         "origin": "Godalming",
         "destination": "London Terminals",
         "date_of_travel": "2025-01-07",
+        "price": "£28.90",
+        "ticket_number": "12345",
         "readable": True,
     })
     text = vision_fields_to_transcript(day)
     assert is_god_wat_route(text)
     assert resolve_journey_date(text, "x.jpg").date().isoformat() == "2025-01-07"
+    assert "Price 28.90" in text
+    assert "Ticket number 12345" in text
 
     weekly = TicketVisionFields.from_dict({
         "document_type": "journey_ticket",

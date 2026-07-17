@@ -41,6 +41,7 @@ from trainline.adapters.ticket_gate import (
     format_match_errors,
     gate_blocks_filing,
     load_claim_dates_from_json,
+    load_ticket_meta,
     match_tickets_to_claims,
     move_to_claimed,
     resolve_ticket_scan_dir,
@@ -587,6 +588,17 @@ def _file_claims(
 
     layout = tickets_layout(tickets_root)
     layout.ensure()
+
+    before = len(claims)
+    claims = filter_claims_not_already_claimed(claims, layout.claimed)
+    skipped = before - len(claims)
+    file_summary["skipped_already_claimed"] = skipped
+    if skipped:
+        _progress(f"Skipping {skipped} claim(s) already under claimed/")
+    if not claims:
+        _progress("Nothing left to file after claimed/ filter.")
+        return 0, file_summary
+
     _progress(f"Ticket gate: scanning {ticket_dir.resolve()}")
     scan = scan_ticket_dir(ticket_dir)
     if scan.missing_directory:
@@ -601,28 +613,14 @@ def _file_claims(
     print(report)
     _progress("Ticket gate PASSED.")
 
-    before = len(claims)
-    claims = filter_claims_not_already_claimed(claims, layout.claimed)
-    skipped = before - len(claims)
-    file_summary["skipped_already_claimed"] = skipped
-    if skipped:
-        _progress(f"Skipping {skipped} claim(s) already under claimed/")
-    if not claims:
-        _progress("Nothing left to file after claimed/ filter.")
-        return 0, file_summary
-
     from trainline.adapters.config import load_ticket_form_defaults
 
     ticket_defaults = load_ticket_form_defaults()
     if live_submit and (
         not ticket_defaults.ticket_price or not ticket_defaults.ticket_reference
     ):
-        _progress(
-            "ERROR: live submit needs ticket_price and ticket_reference "
-            "(SWR_TICKET_PRICE / SWR_TICKET_REFERENCE or keys under ## SWR Delay Repay ##)."
-        )
-        file_summary["gate_ok"] = False
-        return 1, file_summary
+        # Sidecar from classify may still supply per-ticket values below.
+        pass
 
     items = []
     for claim in claims:
@@ -631,13 +629,24 @@ def _file_claims(
             _progress(f"ERROR: no ticket mapped for {claim.date}")
             file_summary["gate_ok"] = False
             return 1, file_summary
+        meta = load_ticket_meta(ticket)
+        price = meta.get("ticket_price") or ticket_defaults.ticket_price
+        reference = meta.get("ticket_reference") or ticket_defaults.ticket_reference
+        if live_submit and (not price or not reference):
+            _progress(
+                f"ERROR: live submit needs ticket_price and ticket_reference for "
+                f"{ticket.name} (OCR sidecar or SWR_TICKET_PRICE / "
+                f"SWR_TICKET_REFERENCE / ## SWR Delay Repay ##)."
+            )
+            file_summary["gate_ok"] = False
+            return 1, file_summary
         items.append(
             (
                 claim,
                 map_claim_for_swr(
                     claim,
-                    ticket_price=ticket_defaults.ticket_price,
-                    ticket_reference=ticket_defaults.ticket_reference,
+                    ticket_price=price,
+                    ticket_reference=reference,
                 ),
                 Path(ticket),
             )
