@@ -1,39 +1,118 @@
-# generated: 2026-07-14
-# last_updated: 2026-07-15
+# generated: 2026-07-16
+# last_updated: 2026-07-16
 # project: lateTrainQueries
 # project_key: NOKEY
 # tracking_system: file-system
 # story_location: {project-root}/_bmad-output/implementation-artifacts
+# release: 2 (baseline: v1.0.0 / master @ 39617cf)
 
-generated: 2026-07-14
-last_updated: 2026-07-15
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created
+#   - in-progress: Developer actively working
+#   - review: Ready for code review
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective completed
+
+generated: 2026-07-16
+last_updated: 2026-07-16
 project: lateTrainQueries
 project_key: NOKEY
 tracking_system: file-system
 story_location: "{project-root}/_bmad-output/implementation-artifacts"
 
 development_status:
-  # Epic 1: Provably-correct claim engine
+  # Release 1 — MVP (done, v1.0.0)
   epic-1: done
   1-1-scaffold-the-hexagonal-package-offline-test-harness: done
   1-2-domain-model-service-claim-dayresult: done
   1-3-delay-band-and-payout: done
   1-4-feasibility-max-payout-optimisation-tie-break: done
   1-5-gated-cancellation-fallback: done
-  epic-1-retrospective: optional
+  epic-1-retrospective: done
 
-  # Epic 2: Real historic data from HSP
   epic-2: done
   2-1-hsp-client-auth-avg-tls-injectable-http-seam: done
   2-2-fetch-servicemetrics-and-extract-all-rids: done
   2-3-fetch-servicedetails-and-map-json-service: done
   2-4-idempotent-on-disk-response-cache: done
   2-5-fetch-failure-contract-per-day-status: done
-  epic-2-retrospective: optional
+  epic-2-retrospective: done
 
-  # Epic 3: One-command, file-ready claims
   epic-3: done
   3-1-config-route-window-dates-credential-loading: done
   3-2-storage-write-claims-as-csv-json-sorted: done
   3-3-cli-composition-root-end-to-end-run: done
-  epic-3-retrospective: optional
+  epic-3-retrospective: done
+
+  # Release 2 — digest, ticket gate, auto-filing
+  epic-4: done
+  4-1-notification-adapter-email-config: done
+  4-2-weekly-digest-email-content: done
+  4-3-cli-digest-integration: done
+  epic-4-retrospective: optional
+
+  epic-5: done
+  5-1-ticket-naming-contract-directory-scanner: done
+  5-2-claim-to-ticket-matcher: done
+  5-3-cli-ticket-prerequisite-gate: done
+  epic-5-retrospective: optional
+
+  # Epic 5b — OCR ticket intake (extends Epic 5 folder workflow)
+  epic-5b: done
+  5-4-ocr-port-classify-pipeline-folders: done
+  5-5-cli-classify-tickets-config-paths: done
+  5-6-gate-ready-to-claim-claimed-dedup: done
+  epic-5b-retrospective: optional
+
+  epic-6: backlog
+  6-1-swr-field-mapping-at-submit: ready-for-dev
+  6-2-playwright-submission-adapter-single-claim: ready-for-dev
+  6-3-batch-auto-file-audit-log: ready-for-dev
+  6-4-single-command-assess-gate-file-pipeline: ready-for-dev
+  epic-6-retrospective: optional
+
+  # Release 3 — weekly ops loop (blocked on Epic 6 for full chain; 7.1 Gmail started)
+  epic-7: in-progress
+  7-1-gmail-api-adapter-port: in-progress
+  7-2-prior-week-window-friday-catchup: backlog
+  7-3-weekly-chain-orchestration: backlog
+  7-4-ops-email-tables: backlog
+  7-5-claim-lifecycle-state: backlog
+  epic-7-retrospective: optional
+
+action_items:
+  - epic: "1-3"
+    action: "Resolve OQ2: verify band %, fare base, and stacking cap against one real SWR filing"
+    owner: "Simon"
+    status: open
+  - epic: "6"
+    action: "Resolve OQ4: SWR session persistence and 2FA impact on unattended --file runs"
+    owner: "Simon"
+    status: open
+  - epic: "7"
+    action: "Copy GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET from financeTracker_SW into creds/trainConfig.txt ## Gmail API ##; run trainline gmail-auth once"
+    owner: "Simon"
+    status: open
+  - epic: "7"
+    action: "After first live SWR claim email, replace placeholder inbox matchers (FR38)"
+    owner: "Simon"
+    status: open
+  - epic: "1-3"
+    action: "Decide equal-band tie-break policy (earliest vs most-delayed within a band)"
+    owner: "Simon"
+    status: open
+  - epic: "3"
+    action: "Capture Windows/PowerShell/AVG environment prerequisites as first-class setup criteria/docs"
+    owner: "Dev"
+    status: open

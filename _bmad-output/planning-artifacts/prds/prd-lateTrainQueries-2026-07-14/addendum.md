@@ -124,6 +124,48 @@ else sits behind an interface so later phases are additive:
 Explicitly **not** in scope until the dependent automation exists: any AWS
 provisioning or Terraform.
 
+## Release 2 — adapter contracts (FR22–FR31)
+
+### Notification (`adapters/notification.py`)
+
+| Env / config | Purpose |
+|--------------|---------|
+| `SMTP_HOST`, `SMTP_PORT` | SMTP server |
+| `SMTP_USER`, `SMTP_PASSWORD` | Auth (never in repo) |
+| `DIGEST_TO` | Recipient address |
+| `send_digest: true` or `--digest` | Trigger after assess |
+
+Digest is best-effort by default; `--digest-strict` fails the run on SMTP error.
+
+### Ticket gate (`adapters/ticket_gate.py`)
+
+- Default directory: `ticket/` (override: `--ticket-dir` or config).
+- Naming regex: `^(?P<month>\d{2})-(?P<day>\d{2})-(?P<ticket>[A-Za-z0-9_-]+)\.(jpg|jpeg|png|pdf)$`
+- Match claim `YYYY-MM-DD` → `MM-DD` portion of filename.
+- Multiple files per date: any one satisfies the date.
+
+### Claim submission (`adapters/claim_submission.py`)
+
+- **Playwright** (not Selenium) — binding decision 2026-07-16.
+- Target: https://delayrepay.southwesternrailway.com/
+- SWR credentials via env (`SWR_USERNAME`, `SWR_PASSWORD`) — never in repo.
+- Injectable `BrowserContext` / page fixture for offline tests.
+- `swr_mapping.py` (pure): CRS→name, reason→category.
+
+### Filing audit log
+
+- Path: `results/filing-audit.jsonl` (configurable).
+- Append-only; one JSON object per line per submission attempt.
+- Fields: `timestamp`, `date`, `direction`, `outcome`, `swr_reference`, `raw_reason`, `ticket_path`.
+
+### CLI pipeline (`--file`)
+
+```
+assess → storage (CSV/JSON) → ticket_gate → claim_submission (batch) → audit log → notification (digest)
+```
+
+Default `python -m trainline` unchanged (assess-only). Ticket gate failure: write output, skip submit, non-zero exit.
+
 ## SWR claim form — field mapping & constraints (for FR13 / OQ3)
 
 Published SWR online claim form requires: journey date; origin and destination;

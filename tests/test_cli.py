@@ -8,7 +8,7 @@ from datetime import date
 
 import pytest
 
-from tests._fakes import FakeResponse, FakeSession
+from tests._fakes import FakeResponse, FakeSession, FakeSmtpTransport
 from trainline import cli
 from trainline.adapters.config import make_config
 from trainline.adapters.hsp_client import HspClient
@@ -34,8 +34,9 @@ def test_all_dates_processed_even_with_batch_size_one(tmp_path):
     client = HspClient("u", "p", session=FakeSession(handler=handler))
     cfg = make_config(batch_size=1)
     dates = ["2026-05-25", "2026-05-26", "2026-05-27"]
-    summary = cli.run(cfg, dates, str(tmp_path / "c.csv"), str(tmp_path / "c.json"),
-                      client=client)
+    summary, _day_results = cli.run(
+        cfg, dates, str(tmp_path / "c.csv"), str(tmp_path / "c.json"),
+        client=client)
     assert summary["days_total"] == 3
     assert summary["analysed"] == 3
     assert summary["total_claims"] == 0
@@ -84,13 +85,78 @@ def test_main_help_exits_zero():
 
 
 @pytest.mark.offline
+def test_help_lists_digest_flags(capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--help"])
+    assert exc.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "--digest" in help_text
+    assert "--no-digest" in help_text
+    assert "--digest-strict" in help_text
+    assert "--check-tickets" in help_text
+    assert "--ticket-dir" in help_text
+    assert "--classify-tickets" in help_text
+    assert "--tickets-root" in help_text
+
+
+@pytest.mark.offline
+def test_digest_body_marks_fetch_failed_distinct_from_no_claim(
+        monkeypatch, tmp_path):
+    """Manual case 6 offline: digest text separates FETCH_FAILED from no-claim."""
+    from trainline.engine.models import FetchStatus, FetchedDay
+
+    calls = {"n": 0}
+
+    def fake_fetch_day(client, day, *args, **kwargs):
+        calls["n"] += 1
+        if day == "2026-07-09":
+            return FetchedDay(date=day, status=FetchStatus.FETCH_FAILED)
+        return FetchedDay(date=day, status=FetchStatus.OK)
+
+    transport = FakeSmtpTransport()
+    monkeypatch.setattr(cli, "_digest_transport", transport)
+    monkeypatch.setattr(cli, "fetch_day", fake_fetch_day)
+    monkeypatch.setattr(
+        cli, "build_client",
+        lambda **kw: HspClient("u", "p", session=FakeSession()))
+
+    for key, value in {
+        "SMTP_HOST": "smtp.example.test",
+        "SMTP_PORT": "587",
+        "SMTP_USER": "sender@example.test",
+        "SMTP_PASSWORD": "s3cret",
+        "DIGEST_TO": "simon@example.test",
+    }.items():
+        monkeypatch.setenv(key, value)
+
+    creds = tmp_path / "creds.txt"
+    creds.write_text("[configuration]\nusername=u\npassword=p\n", encoding="utf-8")
+    rc = cli.main([
+        "--digest",
+        "--from-date", "2026-07-08",
+        "--to-date", "2026-07-09",
+        "--out-dir", str(tmp_path / "Results"),
+        "--credentials-file", str(creds),
+        "--cache-dir", str(tmp_path / "cache"),
+    ])
+    assert rc == 0
+    assert len(transport.sent) == 1
+    msg, _ = transport.sent[0]
+    text = msg.get_body(preferencelist=("plain",)).get_content()
+    idx = text.casefold().index("not analysed")
+    failed_section = text[idx:]
+    assert "2026-07-09" in failed_section
+    assert "2026-07-08" not in failed_section
+
+
+@pytest.mark.offline
 def test_no_cancellations_flag_disables_fallback(monkeypatch, tmp_path):
     # --no-cancellations should turn the AD-6 gate off for the run's config.
     captured = {}
 
     def fake_run(config, dates, out_csv, out_json, **kw):
         captured["config"] = config
-        return cli.summarise([])
+        return cli.summarise([]), []
 
     monkeypatch.setattr(cli, "run", fake_run)
     cli.main(["--from-date", "2026-07-10", "--to-date", "2026-07-10",
@@ -104,7 +170,7 @@ def test_cancellations_enabled_by_default(monkeypatch, tmp_path):
 
     def fake_run(config, dates, out_csv, out_json, **kw):
         captured["config"] = config
-        return cli.summarise([])
+        return cli.summarise([]), []
 
     monkeypatch.setattr(cli, "run", fake_run)
     cli.main(["--from-date", "2026-07-10", "--to-date", "2026-07-10",

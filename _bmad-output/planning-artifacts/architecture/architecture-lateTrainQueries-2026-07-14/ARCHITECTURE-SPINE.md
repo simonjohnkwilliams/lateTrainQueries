@@ -4,11 +4,12 @@ type: architecture-spine
 purpose: build-substrate
 altitude: feature
 paradigm: 'hexagonal (ports & adapters) with a pure-function domain core'
-scope: 'MVP module boundaries, greenfield migration approach, and the cancellation-fallback seam for the solo Python CLI. Infra/deployment explicitly out of scope.'
+scope: 'Release 1 MVP + Release 2 roadmap adapters (notification, ticket gate, claim submission). Infra/deployment explicitly out of scope.'
 status: final
 created: '2026-07-14'
-updated: '2026-07-14'
-binds: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, FR8, FR9, FR10, FR11, FR12, FR13, FR14, FR15, FR16, FR17, FR18, FR19, FR20, FR21, NFR1, NFR2, NFR3, NFR4, NFR5, NFR6]
+updated: '2026-07-16'
+release: 2
+binds: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, FR8, FR9, FR10, FR11, FR12, FR13, FR14, FR15, FR16, FR17, FR18, FR19, FR20, FR21, FR22, FR23, FR24, FR25, FR26, FR27, FR28, FR29, FR30, FR31, NFR1, NFR2, NFR3, NFR4, NFR5, NFR6, NFR7, NFR8, NFR9, NFR10]
 sources:
   - '../../prds/prd-lateTrainQueries-2026-07-14/prd.md'
   - '../../prds/prd-lateTrainQueries-2026-07-14/addendum.md'
@@ -25,7 +26,7 @@ Python package replaces the existing monolithic `TrainLine/TestFileGenerator.py`
 | Layer | Namespace | Holds |
 | --- | --- | --- |
 | Domain core (pure) | `trainline/engine/` | `models`, `delay`, `optimiser` — the claimable-delay model; imports nothing I/O |
-| Adapters (I/O) | `trainline/adapters/` | `hsp_client`, `storage`, `config` — the outside world, mapped to/from domain types |
+| Adapters (I/O) | `trainline/adapters/` | `hsp_client`, `storage`, `config`, `notification`, `ticket_gate`, `claim_submission` (+ pure `swr_mapping` helpers) |
 | Composition root | `trainline/cli.py` | wires config → hsp_client → engine → storage; a future Lambda handler is a second root |
 
 ## Invariants & Rules
@@ -80,6 +81,9 @@ graph TD
     cli[cli.py] --> config[adapters/config]
     cli --> hsp[adapters/hsp_client]
     cli --> storage[adapters/storage]
+    cli --> notif[adapters/notification]
+    cli --> tgate[adapters/ticket_gate]
+    cli --> csub[adapters/claim_submission]
     cli --> engine[engine: optimise/delay/models]
     hsp --> models[engine.models]
     storage --> models
@@ -103,6 +107,31 @@ graph TD
 - **Prevents:** stories built without tests, or tests retrofitted to rubber-stamp whatever the code happened to do (which is exactly how the old model's wrong behaviour got locked in — FR20)
 - **Rule:** each story is built **test-first**. Its acceptance criteria are encoded as **executable acceptance tests written before the implementation** — expressed as pytest-bdd Gherkin scenarios (`@offline` by default) that map one-to-one to the criteria — and each must be seen to **fail first, then pass**. Engine logic (`delay`, `optimiser`) is driven by TDD unit tests underneath. A story is not done until its acceptance tests are green and no criterion is without a test. Every story carries its acceptance tests inline.
 
+### AD-13 — Notification adapter seam (Release 2) `[ADOPTED 2026-07-16]`
+- **Binds:** `adapters/notification`, `cli`; FR22, NFR7, NFR9
+- **Prevents:** SMTP/email concerns leaking into engine or submission adapter
+- **Rule:** `notification.send_digest(subject, html, text)` is the sole email entry point. SMTP transport is injectable for offline tests. Credentials from env/config only.
+
+### AD-14 — Ticket gate adapter (Release 2) `[ADOPTED 2026-07-16]`
+- **Binds:** `adapters/ticket_gate`, `cli`; FR23, FR24, FR25, NFR7
+- **Prevents:** ticket filesystem logic coupling to browser automation
+- **Rule:** `ticket_gate` owns scan, parse, and claim-to-file matching. Returns `MatchResult(ok, missing_dates, mapping)`. No Playwright imports. Naming contract: `<MM-DD-TICKET_NUMBER>.{jpg|jpeg|png|pdf}`.
+
+### AD-15 — Claim submission adapter (Release 2) `[ADOPTED 2026-07-16]`
+- **Binds:** `adapters/claim_submission`, `adapters/swr_mapping` (pure); FR26, FR27, FR28, NFR7, NFR8, NFR9
+- **Prevents:** browser automation leaking into engine or ticket gate
+- **Rule:** **Playwright** is the binding browser stack (not Selenium). `submit_claim(claim, ticket_path, mapped_fields)` and `submit_all(claims, mapping)` accept injectable `Page`/`BrowserContext` for offline tests. SWR field mapping lives in pure `swr_mapping` helpers importable without Playwright. Live tests `@live` gated.
+
+### AD-16 — Filing audit log (Release 2) `[ADOPTED 2026-07-16]`
+- **Binds:** `adapters/claim_submission` or `filing_audit` helper; FR29, NFR10
+- **Prevents:** silent or non-replayable filing history
+- **Rule:** append-only JSONL at configurable path (default `results/filing-audit.jsonl`). One line per attempt. Partial batch failure appends error lines; never truncates prior entries.
+
+### AD-17 — Release 2 CLI pipeline `[ADOPTED 2026-07-16]`
+- **Binds:** `cli`; FR30, FR31, AD-8
+- **Prevents:** multiple divergent filing orchestration paths
+- **Rule:** `--file` runs: assess → storage → ticket_gate → claim_submission (batch) → audit → notification (digest). Ticket gate failure: output written, submit skipped, non-zero exit. Default run (no `--file`) is Release 1 assess-only. `cli` is still the sole orchestrator; adapters never call each other.
+
 ## Consistency Conventions
 
 | Concern | Convention |
@@ -120,6 +149,7 @@ graph TD
 | requests | >=2.31 |
 | pytest | >=7.0 |
 | pytest-bdd | >=7.0 |
+| playwright | >=1.40 (Release 2 — claim submission) |
 
 ## Structural Seed
 
@@ -128,17 +158,37 @@ trainline/
   engine/                # pure domain core — imports nothing I/O (AD-1)
     models.py            #   Service, Claim, DayResult (AD-3)
     delay.py             #   calculate_delay, band(delay), payout(band)
-    optimiser.py         #   per-day max-payout optimise + gated cancellation path (AD-6)
+    optimiser.py         #   per-day max-payout optimise + cancellation path (AD-6)
   adapters/
-    hsp_client.py        #   HSP HTTP + auth + TLS/CA-bundle + response cache; JSON->Service (AD-3,4,5,7)
+    hsp_client.py        #   HSP HTTP + auth + TLS/CA-bundle + response cache
     storage.py           #   Claim -> CSV + JSON (FR14)
     config.py            #   route / time window / credentials (FR16,17)
-  cli.py                 # composition root (AD-8)
+    notification.py      #   SMTP digest (AD-13, FR22)
+    ticket_gate.py       #   ticket scan + claim match (AD-14, FR23-25)
+    swr_mapping.py       #   pure CRS/reason mapping (AD-15, FR27)
+    claim_submission.py  #   Playwright SWR submit + audit (AD-15,16, FR26-29)
+  cli.py                 # composition root — assess and --file pipelines (AD-8,17)
 tests/
-  ...                    # new-model unit + BDD tests (FR19-21); old-behaviour tests removed (FR20)
+  ...                    # offline + @live gated; import-boundary test extended (NFR7)
 ```
 
-Data flow (one run):
+Data flow (Release 2 `--file` run):
+
+```mermaid
+graph LR
+    C[config] --> CLI[cli]
+    CLI -->|route, window| H[hsp_client]
+    H -->|per-day: status + Services| E[engine.optimise]
+    E -->|list DayResult| S[storage]
+    S --> F[(CSV + JSON)]
+    CLI --> T[ticket_gate]
+    T -->|mapping| CS[claim_submission]
+    CS --> A[(filing-audit.jsonl)]
+    CLI --> N[notification]
+    S --> N
+```
+
+Data flow (Release 1 default — unchanged):
 
 ```mermaid
 graph LR
@@ -161,10 +211,19 @@ graph LR
 | FR13–FR15 claim output (SWR fields, CSV+JSON, sorted) | `adapters/storage` | AD-3, AD-11 |
 | FR16–FR18 config-driven route/window/creds, season-ticket-ready | `adapters/config`, `engine.models` | AD-3 |
 | FR19–FR21, NFR2 new-model test suite, offline-first, test-first | `tests/`, `adapters/hsp_client` seam | AD-7, AD-12, testing convention |
+| FR22 email digest | `adapters/notification` | AD-13, AD-2 |
+| FR23–FR25 ticket gate | `adapters/ticket_gate` | AD-14, AD-2 |
+| FR26–FR28 SWR auto-file + mapping | `adapters/claim_submission`, `adapters/swr_mapping` | AD-15, AD-2 |
+| FR29 filing audit | `adapters/claim_submission` | AD-16 |
+| FR30–FR31 `--file` pipeline | `cli` | AD-17, AD-8 |
 
 ## Deferred
 
-- **Infra / deployment / AWS / Terraform** — out of scope by the roadmap; no provisioning until the automation that needs it exists.
-- **Roadmap adapters** (email digest, SWR auto-filing, ticket ingest, Lambda handler) — added later as new adapters + composition roots behind the same boundaries (AD-1, AD-8); no port shapes fixed now beyond the pure-core contract.
-- **OQ1 — cancellation JSON shape — RESOLVED (2026-07-15).** A cancelled service is empty `actual_ta`/`actual_td` at every calling point + a `late_canc_reason` code; real fixtures captured (`tests/fixtures/recorded_details_cancelled_*.json`). The AD-6 flag is now **on by default** in `RunConfig` (CLI `--no-cancellations` opts out); validated by `tests/test_cancellation_recorded.py`.
-- **OQ2 — payout base & claim stacking** — pre-provisioned, not fully deferrable: `engine.delay.payout` takes ticket-type parameters and `engine.optimiser`'s objective accepts an optional per-day cap (AD-10, AD-11). So the *single-vs-return base* is a data change, but if SWR **caps** stacked claims the objective flips from `max Σ` to `max min(Σ, cap)` — that path exists in the signature now; resolving OQ2 sets the cap value rather than restructuring the optimiser.
+- **Infra / deployment / AWS / Terraform** — deferred past Release 2 (PRD §8).
+- **Photo → OCR ticket read** — deferred; Release 2 uses manual naming only.
+- **Season-ticket band track** — FR18 data model ready; logic deferred.
+- **Ticket ingest adapter** (auto-discover without naming) — deferred.
+- **Lambda handler** — second composition root; deferred until cloud phase.
+- **OQ1 — cancellation JSON shape — RESOLVED (2026-07-15).** AD-6 flag on by default.
+- **OQ2 — payout base & claim stacking** — pre-provisioned in AD-10/11; may close in parallel with Release 2.
+- **OQ4 — SWR session / 2FA** — open; revisit at first live `--file` run.

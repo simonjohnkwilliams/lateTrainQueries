@@ -36,3 +36,17 @@ class FakeSession:
         if self._handler is None:
             return FakeResponse({})
         return self._handler(url, kwargs)
+
+
+class FakeSmtpTransport:
+    """Records digest sends; never opens a real SMTP connection (AD-13).
+
+    Callable as ``transport(msg, config)`` — the injectable seam for
+    ``notification.send_digest``.
+    """
+
+    def __init__(self):
+        self.sent = []
+
+    def __call__(self, msg, config):
+        self.sent.append((msg, config))

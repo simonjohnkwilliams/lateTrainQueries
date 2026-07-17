@@ -24,7 +24,9 @@ FORBIDDEN_IO = {
     "pickle", "shutil", "subprocess", "logging", "tempfile", "shelve",
 }
 
-ADAPTER_NAMES = {"hsp_client", "storage", "config"}
+ADAPTER_NAMES = {
+    "hsp_client", "storage", "config", "notification", "ticket_gate", "ticket_intake",
+}
 
 
 def _iter_py_files(directory):
@@ -41,6 +43,8 @@ def _imported_module_paths(path):
 
     Relative imports (``from . import x`` / ``from ..adapters import y``) are
     rendered with leading dots so sibling-adapter references are detectable.
+    Also records bare imported names (``from . import config`` → ``config``)
+    so AD-2 peer-adapter imports cannot hide behind alias-only forms.
     """
     with open(path, encoding="utf-8") as fh:
         tree = ast.parse(fh.read(), filename=path)
@@ -52,6 +56,11 @@ def _imported_module_paths(path):
         elif isinstance(node, ast.ImportFrom):
             prefix = "." * node.level
             names.add(prefix + (node.module or ""))
+            for alias in node.names:
+                # ``from . import config`` / ``from trainline.adapters import config``
+                names.add(alias.name)
+                if node.module:
+                    names.add(prefix + node.module + "." + alias.name)
     return names
 
 

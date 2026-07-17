@@ -17,6 +17,9 @@ MODULES = [
     "trainline.adapters.hsp_client",
     "trainline.adapters.storage",
     "trainline.adapters.config",
+    "trainline.adapters.notification",
+    "trainline.adapters.ticket_gate",
+    "trainline.adapters.ticket_intake",
     "trainline.cli",
 ]
 

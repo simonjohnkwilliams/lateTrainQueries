@@ -7,6 +7,12 @@ creds/
 # Live-capture working dir (used when refreshing recorded fixtures)
 live-capture/
 
+# Bulk local ticket dumps (multi-MB phone photos) — do not commit
+sample-tickets/
+
+# Runtime ticket workflow tree (intake / processed / claimed) — repo root only
+/tickets/
+
 # Python
 __pycache__/
 *.pyc

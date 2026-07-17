@@ -1,0 +1,41 @@
+{
+  "_comment": "Ground truth from visual inspection of UK National Rail tickets. Months use APTIS anti-fraud codes (JNR=Jan, FBY=Feb, MCH=Mar, JLY=Jul, DMR=Dec), not OCR errors.",
+  "day_return_07-JNR-25_terminals.jpg": {
+    "ticket_kind": "anytime_day_return",
+    "origin": "Godalming",
+    "destination": "London Terminals",
+    "date_of_travel_print": "07-JNR-25",
+    "journey_date": "2025-01-07",
+    "ready_name_was_wrong": "01-31-Terminals.jpg",
+    "wrong_reason": "Phone capture stamp 20250131_* used as journey date when OCR failed"
+  },
+  "day_return_06-JNR-25_terminals.jpg": {
+    "ticket_kind": "anytime_day_return",
+    "origin": "Godalming",
+    "destination": "London Terminals",
+    "date_of_travel_print": "06-JNR-25",
+    "journey_date": "2025-01-06",
+    "ready_name_was_wrong": "01-31-yaiiag.jpg",
+    "wrong_reason": "Phone capture stamp 20250131_* used as journey date when OCR failed"
+  },
+  "weekly_27-JNR-20_to_02-FBY-20_travelcard.jpg": {
+    "ticket_kind": "travelcard_7day",
+    "origin": "Godalming",
+    "destination": "London Zones 1-6",
+    "start_date_print": "27-JNR-20",
+    "valid_until_print": "02-FBY-20",
+    "start_date": "2020-01-27",
+    "valid_until": "2020-02-02",
+    "journey_date": "2020-01-27",
+    "ready_name_was_wrong": "02-07-lraelcad.jpg",
+    "wrong_reason": "Valid-until preferred over start date; also day/month swap risk"
+  },
+  "day_return_26-MCH-24_terminals.jpg": {
+    "ticket_kind": "anytime_day_return",
+    "origin": "London Terminals",
+    "destination": "Godalming",
+    "date_of_travel_print": "26-MCH-24",
+    "journey_date": "2024-03-26",
+    "ready_name_was_ok": "03-26-Terminals.jpg"
+  }
+}

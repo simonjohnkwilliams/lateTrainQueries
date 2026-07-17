@@ -102,7 +102,7 @@ def recorded(world, day):
 def run_pipeline(world):
     session = FakeSession(handler=world["handler"])
     client = HspClient("u", "p", session=session)
-    world["summary"] = cli.run(
+    world["summary"], _day_results = cli.run(
         default_config(), world["dates"], world["csv"], world["json"],
         client=client)
 

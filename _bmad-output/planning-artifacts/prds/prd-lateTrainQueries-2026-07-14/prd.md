@@ -2,7 +2,8 @@
 title: Late Train Query Engine — PRD
 status: final
 created: 2026-07-14
-updated: 2026-07-14
+updated: 2026-07-16
+release: 2
 ---
 
 # Late Train Query Engine — PRD
@@ -17,8 +18,10 @@ It queries the National Rail HSP (Historic Service Performance) API for what
 actually ran on the route, then runs a **payout-maximising optimisation** over
 *every* train that day — not the trains Simon caught, but the trains he *could*
 have caught on an **open day return** ticket. The MVP produces correct,
-hand-fileable claim data. The long game (roadmap, §8) is a photograph-to-payout
-pipeline that files claims automatically.
+hand-fileable claim data. **Release 1 (v1.0.0)** delivered this MVP. **Release 2**
+adds weekly email digest, ticket-artifact gating, and hands-off SWR auto-filing.
+The long game (roadmap, §8) remains photograph-to-payout with minimal
+intervention.
 
 **Why now / why this rewrite.** No product today answers the real question —
 *"given everything that ran on my route this week, what is the maximum I can
@@ -43,7 +46,8 @@ replaces that behaviour with the claimable-delay model in §4.
 |---|--------|--------|
 | SM1 | For a chosen week, every claim row the tool emits checks out when Simon verifies it against the SWR site before filing | 100% of emitted rows valid |
 | SM2 | On a periodic spot-check, days the tool emitted nothing for that manual inspection of the same HSP data finds claimable | 0 missed in the sampled week |
-| SM3 | Manual effort per week to produce fileable claim data | Run one command, eyeball the output |
+| SM3 | Manual effort per week to produce fileable claim data | Release 1: one command, eyeball output. Release 2: one `--file` command, audit log only |
+| SM4 | Claims filed without manual copy-paste into SWR | 100% of emitted rows auto-submitted when `--file` runs and tickets present |
 
 **Counter-metrics (guard against gaming SM1/SM2)**
 
@@ -195,6 +199,34 @@ FRs are grouped by capability. IDs are stable and globally numbered.
 - **FR21** — Offline tests run with no network and no credentials by default;
   optimisation logic is covered by fixtures grounded in real HSP responses.
 
+### 5.7 Release 2 — Notification, ticket gate, and auto-filing
+
+_Released 1 (v1.0.0) shipped FR1–FR21. Release 2 adds FR22–FR31._
+
+- **FR22** — After a claims run, send an email digest summarising the week's
+  claimable rows (dates, directions, bands, delays).
+- **FR23** — Ticket artifacts live in a configurable `ticket/` directory; each
+  file is a photo (`.jpg`/`.jpeg`/`.png`) or PDF of a digital ticket.
+- **FR24** — Ticket files follow the naming contract
+  `<MM-DD-TICKET_NUMBER>` (e.g. `07-10-ABC123`); misnamed files are rejected
+  with a clear error listing invalid names.
+- **FR25** — Before auto-filing, every claim row's journey date must have at
+  least one correctly named ticket file; missing tickets hard-error with a list
+  of gaps. Standalone `--check-tickets` validates without filing.
+- **FR26** — Auto-submit all emitted claim rows to the SWR Delay Repay site via
+  **Playwright** browser automation.
+- **FR27** — Map CRS codes → station names and HSP `reason` → SWR delay-reason
+  category at submit time (OQ3 follow-up); raw HSP code preserved in audit log.
+- **FR28** — Attach/upload the matching ticket file per claim during SWR form
+  submission.
+- **FR29** — Write an append-only audit log (JSONL) of every filing attempt:
+  timestamp, journey date, direction, outcome, SWR reference if available, raw
+  reason code.
+- **FR30** — A single CLI command (`--file`) runs assess → write output →
+  ticket gate → batch submit → audit log → digest email.
+- **FR31** — Release 1 assess-only behaviour preserved as default
+  (`python -m trainline` without `--file`).
+
 ## 6. Non-Functional Requirements
 
 - **NFR1 — Correctness is the top priority.** A wrong claim (over- or
@@ -212,6 +244,17 @@ FRs are grouped by capability. IDs are stable and globally numbered.
 - **NFR6 — Implemented in Python**, matching the existing codebase and the HSP
   `requests` integration.
 
+### Release 2 non-functional requirements
+
+- **NFR7 — Adapter boundaries hold.** New `notification`, `ticket_gate`, and
+  `claim_submission` adapters follow AD-2: no adapter imports another adapter.
+- **NFR8 — Browser tests offline-first.** Playwright submission tests use
+  injectable page fixtures / recorded HTML; live SWR tests are `@live` gated.
+- **NFR9 — Credential hygiene.** SMTP and SWR login credentials come from
+  config/env, never committed (same pattern as FR17).
+- **NFR10 — Audit durability.** Filing audit log is append-only JSONL on local
+  disk; partial batch failure does not corrupt prior entries.
+
 ## 7. Architecture Constraints & Seams
 
 The MVP is built as a **pure optimisation core** (FR11) with every side-effect
@@ -226,26 +269,33 @@ provisioning or Terraform. The seams/technical-how detail lives in
 
 ## 8. Scope & Roadmap
 
-**MVP (in scope)**
+**Release 1 — MVP (shipped v1.0.0, 2026-07-16)**
 
-- The claimable-delay optimisation engine (FR6–FR11) producing correct per-day
-  claim data.
-- HSP data acquisition + caching (FR1–FR5).
-- Config-driven route/window (FR16–FR18).
-- CSV + JSON output of SWR form fields (FR13–FR15).
-- The new-model test suite (FR19–FR21).
+- FR1–FR21 as listed above. Cancellation fallback (FR12) enabled by default
+  (OQ1 resolved 2026-07-15).
 
-**Out / later (roadmap, built additively behind the §7 seams, roughly in order)**
+**Release 2 — Hands-off filing (in scope, approved 2026-07-16)**
 
-1. Email digest of the week's claims.
-2. Automated filing on the SWR site (Playwright/Selenium).
-3. Ticket upload mechanism.
-4. Photo → OCR → assess → auto-claim (the endgame trigger).
-5. Cloud deployment — AWS Lambda behind an API endpoint, invoked on ticket photo.
-6. Season-ticket support (different band track; data model already allows it per
-   FR18).
+- Weekly email digest (FR22).
+- Ticket artifact gate — naming contract + prerequisite check (FR23–FR25).
+- SWR auto-filing via Playwright — all rows, audit log, single `--file`
+  command (FR26–FR31).
+- Epics 4–6; see `../../epics.md`.
 
-**Cancellation fallback (FR12)** — OQ1 resolved (2026-07-15); enabled by default.
+**Deferred past Release 2**
+
+1. ~~Photo → OCR → auto-read ticket contents~~ — **delivered locally via Ollama** (Epic 5b / vision gate).
+2. ~~AWS Lambda / cloud API endpoint~~ — **CANCELLED (2026-07-17).** Product runs locally (Windows + Ollama + Task Scheduler); no cloud deploy planned.
+3. Season-ticket band track (FR18 data model ready; logic deferred).
+4. ~~Ticket ingest adapter (auto-discover tickets without manual naming)~~ — largely covered by Ollama classify + folder workflow.
+
+**Release 3 — Local weekly ops loop (approved 2026-07-17)**
+
+- Friday / catch-up schedule for **prior** Mon–Fri week (FR32–FR33).
+- Chain: assess → classify → file (Epic 6) → Gmail ops email (FR34–FR36).
+- Claim lifecycle via Gmail inbox: received → paid, with Table 2 follow-up (FR37–FR38).
+- Gmail API port from financeTracker_SW (FR40).
+- See `../../epics.md` Epic 7. **Blocked on Epic 6.**
 
 ## 9. Open Questions & Assumptions
 
@@ -267,9 +317,13 @@ provisioning or Terraform. The seams/technical-how detail lives in
   or caps at the ticket value. The optimiser sums two claims (FR9), so if (c) is
   capped the objective must cap too. SM1 (Simon verifies every row against the
   SWR site before filing) catches any over-claim in the meantime. _[ASSUMPTION]_
-- **OQ3.** SWR form field mapping (FR13) is based on the published form; validate
-  the exact fields against the live form before the automation phase (a
-  screenshot would help then).
+- **OQ3 — VALIDATED (2026-07-15); mapping in Release 2 (FR27).** CSV→form
+  field mapping confirmed against published SWR Delay Repay form. Release 2
+  maps at submit time: CRS→station name, HSP reason→SWR category; raw code kept
+  in audit log. Full mapping table in [`addendum.md`](./addendum.md).
+- **OQ4 (owner: Simon; revisit: first `--file` live run).** SWR session handling
+  — whether login persists across batch submissions, and whether 2FA blocks
+  unattended filing.
 - **[ASSUMPTION]** MVP surfaces the SWR **band**, not a £ payout, and this is
   sufficient for now (confirmed with Simon).
 - **[ASSUMPTION]** Claims are filed within SWR's **28-day** window; the tool is

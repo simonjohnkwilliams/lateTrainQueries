@@ -1,8 +1,9 @@
 """Composition root (AD-8) - the only MVP orchestrator.
 
-Wires config -> hsp_client -> engine.optimise -> storage and nothing else
-orchestrates. A future Lambda handler would be a second composition root calling
-the same ``engine.optimise``; orchestration never moves into the engine.
+Wires config -> hsp_client -> engine.optimise -> storage (+ optional digest)
+and nothing else orchestrates. A future Lambda handler would be a second
+composition root calling the same ``engine.optimise``; orchestration never
+moves into the engine.
 
 MVP one-liner: ``python -m trainline`` analyses the last week of weekdays and
 writes ``Results/claims.csv`` + ``Results/claims.json``. Credentials default to
@@ -19,13 +20,42 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from trainline.adapters import storage
-from trainline.adapters.config import default_config, load_hsp_credentials, make_config
+from trainline.adapters.config import (
+    EmailConfigError,
+    default_config,
+    load_email_config,
+    load_hsp_credentials,
+    make_config,
+)
 from trainline.adapters.hsp_client import HspClient, fetch_day
+from trainline.adapters.notification import digest_subject, render_digest, send_digest
+from trainline.adapters.ticket_gate import (
+    format_match_errors,
+    gate_blocks_filing,
+    load_claim_dates_from_json,
+    match_tickets_to_claims,
+    resolve_ticket_scan_dir,
+    scan_ticket_dir,
+)
+from trainline.adapters.ticket_intake import (
+    classify_unclassified,
+    tickets_layout,
+)
+from trainline.adapters.ollama_vision import (
+    DEFAULT_MODEL as OLLAMA_DEFAULT_MODEL,
+    FALLBACK_MODEL as OLLAMA_FALLBACK_MODEL,
+    OllamaVisionOcrEngine,
+    ensure_ollama_reachable,
+    list_ollama_models,
+)
 from trainline.engine.models import FetchStatus
 from trainline.engine.optimiser import optimise
 
 # MVP default: one working week of weekday analysis ending yesterday.
 DEFAULT_DAYS_BACK = 5
+
+# Injectable SMTP transport for offline tests (Story 4.3). ``None`` => real SMTP.
+_digest_transport = None
 
 
 def _today() -> date:
@@ -128,13 +158,28 @@ def build_client(session=None, cache_dir=None, credentials_path=None):
 
 
 def _progress(msg: str) -> None:
-    """User-visible progress on stderr (keeps stdout free for the JSON summary)."""
+    """User-visible progress on stderr (keeps stdout free for JSON summaries)."""
     print(msg, file=sys.stderr, flush=True)
+
+
+def _configure_cli_logging() -> None:
+    """INFO logging to stderr for every CLI entry path (assess, classify, check)."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        datefmt="%H:%M:%S",
+        stream=sys.stderr,
+        force=True,
+    )
 
 
 def run(config, dates, out_csv, out_json, *, client=None, session=None,
         cache_dir=None, credentials_path=None):
-    """Run the pipeline end-to-end and write CSV + JSON claim files."""
+    """Run the pipeline end-to-end and write CSV + JSON claim files.
+
+    Returns ``(summary, day_results)`` so the composition root can render a
+    digest (Story 4.3) without re-fetching.
+    """
     if client is None:
         _progress("Loading credentials and building HSP client...")
         client = build_client(session=session, cache_dir=cache_dir,
@@ -170,7 +215,7 @@ def run(config, dates, out_csv, out_json, *, client=None, session=None,
     claims = [claim for day_result in day_results for claim in day_result.claims]
     _progress(f"Writing {len(claims)} claim row(s) to {out_csv} and {out_json}...")
     storage.write_claims(claims, out_csv, out_json)
-    return summarise(day_results)
+    return summarise(day_results), day_results
 
 
 def summarise(day_results) -> dict:
@@ -187,6 +232,180 @@ def summarise(day_results) -> dict:
     }
 
 
+def _maybe_send_digest(day_results, *, strict: bool, credentials_path: str | None = None) -> int:
+    """Send weekly digest. Returns 0 on success/best-effort fail; 1/2 on hard fail."""
+    try:
+        email_cfg = load_email_config(credentials_path=credentials_path)
+    except EmailConfigError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    html, text = render_digest(day_results)
+    subject = digest_subject(day_results)
+    try:
+        send_digest(
+            subject, html, text, email_cfg, transport=_digest_transport)
+    except Exception as exc:  # noqa: BLE001 - digest is best-effort unless strict
+        if strict:
+            logging.error("Digest send failed (--digest-strict): %s", exc)
+            print(f"Digest send failed: {exc}", file=sys.stderr)
+            return 1
+        logging.warning("Digest send failed (best-effort): %s", exc)
+        print(f"Digest send failed (continuing): {exc}", file=sys.stderr)
+        return 0
+    _progress(f"Digest sent to {email_cfg.digest_to}")
+    return 0
+
+
+def _run_check_tickets(*, out_dir: Path, ticket_dir: Path) -> int:
+    """Standalone ticket gate against existing claims.json (Story 5.3)."""
+    _progress(f"Ticket gate: scanning {ticket_dir.resolve()}")
+    _progress(f"Claims file: {(out_dir / 'claims.json').resolve()}")
+    json_path = out_dir / "claims.json"
+    if not json_path.is_file():
+        _progress(
+            f"ERROR: No claims file at {json_path} - run an assess first "
+            f"or pass --out-dir"
+        )
+        return 2
+    try:
+        claims = load_claim_dates_from_json(json_path)
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        _progress(f"ERROR: Cannot read claims from {json_path}: {exc}")
+        return 2
+    dates = sorted({c.date for c in claims})
+    _progress(f"Loaded {len(claims)} claim row(s) covering {len(dates)} date(s)")
+    scan = scan_ticket_dir(ticket_dir)
+    if scan.missing_directory:
+        _progress(f"WARNING: ticket directory does not exist: {ticket_dir}")
+    else:
+        _progress(
+            f"Found {len(scan.valid)} valid ticket file(s), "
+            f"{len(scan.invalid)} misnamed"
+        )
+    result = match_tickets_to_claims(claims, scan)
+    report = format_match_errors(result)
+    # Success summary on stdout (tests / piping); failures and progress on stderr.
+    if result.ok:
+        print(report)
+        _progress("Ticket gate PASSED - all claim dates have matching tickets.")
+        return 0
+    print(report, file=sys.stderr)
+    _progress("Ticket gate FAILED - fix missing/misnamed tickets before --file.")
+    return 1 if gate_blocks_filing(result) else 0
+
+
+def _run_classify_tickets(*, tickets_root: Path, ocr=None) -> int:
+    """OCR-classify ``unclassified/`` into ready_to_claim / rejected (Epic 5b)."""
+    layout = tickets_layout(tickets_root)
+    layout.ensure()
+    root = layout.root.resolve()
+    _progress(f"Ticket OCR classify - root: {root}")
+    _progress(f"  inbox:     {layout.unclassified}")
+    _progress(f"  ready:     {layout.ready_to_claim}")
+    _progress(f"  rejected:  {layout.rejected}")
+    _progress(f"  claimed:   {layout.claimed}")
+
+    pending = sorted(
+        p for p in layout.unclassified.iterdir()
+        if p.is_file() and p.suffix.casefold() in {".jpg", ".jpeg", ".png", ".pdf"}
+    )
+    if not pending:
+        _progress(
+            "Nothing to do: unclassified/ is empty.\n"
+            "  Drop ticket photos/PDFs into that folder, then re-run:\n"
+            "    python -m trainline --classify-tickets\n"
+            f"  Tip: copy from sample-tickets/ if you want a dry run."
+        )
+        ready_n = sum(1 for _ in layout.ready_to_claim.glob("*") if _.is_file())
+        rejected_n = sum(1 for _ in layout.rejected.glob("*") if _.is_file())
+        _progress(
+            f"Current inventory - ready_to_claim: {ready_n}, rejected: {rejected_n}"
+        )
+        return 0
+
+    if ocr is not None:
+        engine = ocr
+        engine_label = type(ocr).__name__
+    else:
+        if not ensure_ollama_reachable():
+            _progress(
+                "ERROR: Ollama is not reachable at http://127.0.0.1:11434\n"
+                "  Start Ollama, then: ollama pull qwen2.5vl:7b\n"
+                "  ollama create trainline-ticket -f "
+                "trainline/adapters/ollama/Modelfile.ticket-reader"
+            )
+            return 2
+        names = list_ollama_models()
+        model = OLLAMA_DEFAULT_MODEL
+        if model not in names and f"{model}:latest" not in names:
+            if OLLAMA_FALLBACK_MODEL in names:
+                model = OLLAMA_FALLBACK_MODEL
+                _progress(
+                    f"Note: '{OLLAMA_DEFAULT_MODEL}' not found — using {model}. "
+                    "Create the tuned model with:\n"
+                    "  ollama create trainline-ticket -f "
+                    "trainline/adapters/ollama/Modelfile.ticket-reader"
+                )
+            else:
+                _progress(
+                    f"ERROR: neither '{OLLAMA_DEFAULT_MODEL}' nor "
+                    f"'{OLLAMA_FALLBACK_MODEL}' is installed.\n"
+                    "  ollama pull qwen2.5vl:7b\n"
+                    "  ollama create trainline-ticket -f "
+                    "trainline/adapters/ollama/Modelfile.ticket-reader"
+                )
+                return 2
+        engine = OllamaVisionOcrEngine(model=model)
+        engine_label = f"ollama:{model}"
+
+    _progress(f"Found {len(pending)} file(s) to classify via {engine_label}...")
+
+    def _on_progress(index, total, path, phase, item):
+        if phase == "start":
+            _progress(f"[{index}/{total}] reading {path.name}...")
+        elif phase == "done" and item is not None:
+            label = {
+                "ready": "READY",
+                "rejected_unreadable": "REJECT unreadable",
+                "rejected_route": "REJECT wrong route",
+                "rejected_document": "REJECT wrong document",
+                "rejected_no_date": "REJECT no journey date",
+            }.get(item.outcome, item.outcome)
+            detail = f" ({item.detail})" if item.detail else ""
+            _progress(
+                f"[{index}/{total}] {label}: {path.name} -> {item.destination.name}"
+                f"{detail}"
+            )
+
+    try:
+        summary = classify_unclassified(layout, engine, on_progress=_on_progress)
+    except RuntimeError as exc:
+        _progress(f"ERROR: {exc}")
+        return 2
+
+    _progress(
+        f"Done. Classified {len(summary.items)} file(s): "
+        f"{summary.ready} ready, {summary.rejected} rejected."
+    )
+    if summary.rejected:
+        _progress(
+            "Rejected files need attention under processed/rejected/ "
+            "(unreadable image quality, wrong route, or missing journey date)."
+        )
+        report = layout.rejected / "unreadable_report.txt"
+        if report.exists():
+            _progress(
+                f"Unreadable detail report: {report} "
+                "(resolution / lighting / OCR confidence / rotation hints)."
+            )
+    if summary.ready:
+        _progress(
+            "Next: python -m trainline --check-tickets "
+            "(after an assess has written Results/claims.json)"
+        )
+    return 0
+
+
 def _parse_args(argv):
     parser = argparse.ArgumentParser(
         prog="trainline",
@@ -200,6 +419,7 @@ def _parse_args(argv):
             "  python -m trainline\n"
             "  python -m trainline --days-back 3\n"
             "  python -m trainline --from-date 2026-07-07 --to-date 2026-07-11\n"
+            "  python -m trainline --digest\n"
         ),
     )
     parser.add_argument("--origin", help="Outbound origin CRS (default GOD)")
@@ -238,12 +458,108 @@ def _parse_args(argv):
         "--credentials-file",
         help="Credentials file (default: HSP_CREDENTIALS_FILE or creds/trainConfig.txt)",
     )
+    digest = parser.add_mutually_exclusive_group()
+    digest.add_argument(
+        "--digest", dest="digest", action="store_true",
+        help="Send weekly digest email after a successful assess (FR22)",
+    )
+    digest.add_argument(
+        "--no-digest", dest="no_digest", action="store_true",
+        help="Do not send digest even if config send_digest is true",
+    )
+    parser.add_argument(
+        "--digest-strict", dest="digest_strict", action="store_true",
+        help="Fail the run if digest SMTP send fails (default: best-effort)",
+    )
+    parser.add_argument(
+        "--ticket-dir", dest="ticket_dir", default=None,
+        help=(
+            "Ticket scan directory for --check-tickets "
+            "(default: tickets/processed/ready_to_claim or legacy ticket/)"
+        ),
+    )
+    parser.add_argument(
+        "--tickets-root", dest="tickets_root", default=None,
+        help="Root of unclassified/processed/claimed tree (default: tickets/)",
+    )
+    parser.add_argument(
+        "--check-tickets", dest="check_tickets", action="store_true",
+        help=(
+            "Validate ready_to_claim (or --ticket-dir) against claims.json "
+            "in --out-dir and exit (no HSP fetch; FR25)"
+        ),
+    )
+    parser.add_argument(
+        "--classify-tickets", dest="classify_tickets", action="store_true",
+        help=(
+            "Classify tickets/unclassified into processed/ready_to_claim "
+            "or processed/rejected via Ollama vision (Epic 5b)"
+        ),
+    )
+    parser.add_argument(
+        "--gmail-auth", dest="gmail_auth", action="store_true",
+        help=(
+            "Run Google OAuth consent and store Gmail API token "
+            "(Epic 7; requires ## Gmail API ## in credentials file)"
+        ),
+    )
     return parser.parse_args(argv)
 
 
+def _run_gmail_auth() -> int:
+    """One-shot InstalledAppFlow → write token file (Story 7.1)."""
+    from trainline.adapters.config import GmailConfigError, load_gmail_config
+    from trainline.adapters.gmail import (
+        GmailConfig,
+        run_auth_flow,
+        store_credentials,
+    )
+
+    cred_path = os.environ.get("HSP_CREDENTIALS_FILE")
+    try:
+        cfg = load_gmail_config(credentials_path=cred_path)
+    except GmailConfigError as exc:
+        _progress(f"ERROR: {exc}")
+        return 2
+    gmail_cfg = GmailConfig(
+        client_id=cfg.client_id,
+        client_secret=cfg.client_secret,
+        token_path=cfg.token_path,
+        digest_to=cfg.digest_to,
+    )
+    _progress("Opening browser for Google OAuth (Gmail readonly + send)...")
+    try:
+        creds = run_auth_flow(gmail_cfg)
+        store_credentials(creds, gmail_cfg)
+    except Exception as exc:
+        _progress(f"ERROR: Gmail auth failed: {exc}")
+        return 2
+    _progress(f"Gmail token saved to {gmail_cfg.token_path}")
+    _progress(f"Digest recipient: {gmail_cfg.digest_to}")
+    return 0
+
+
 def main(argv=None) -> int:
-    """CLI entry: config → hsp_client → optimise → storage (AD-8)."""
+    """CLI entry: config → hsp_client → optimise → storage → optional digest (AD-8)."""
     args = _parse_args(argv if argv is not None else sys.argv[1:])
+    _configure_cli_logging()
+
+    tickets_root = Path(args.tickets_root) if args.tickets_root else Path("tickets")
+    out_dir = Path(args.out_dir)
+
+    if args.classify_tickets:
+        return _run_classify_tickets(tickets_root=tickets_root)
+
+    if getattr(args, "gmail_auth", False):
+        return _run_gmail_auth()
+
+    ticket_dir = resolve_ticket_scan_dir(
+        ticket_dir=args.ticket_dir,
+        tickets_root=tickets_root,
+    )
+
+    if args.check_tickets:
+        return _run_check_tickets(out_dir=out_dir, ticket_dir=ticket_dir)
 
     if args.days_back is not None and args.lookback_days is not None:
         print("Use only one of --days-back or --lookback-days", file=sys.stderr)
@@ -261,7 +577,6 @@ def main(argv=None) -> int:
         value = getattr(args, key)
         if value is not None:
             overrides[key] = value
-    # Persist chosen lookback on config for batching summary clarity
     days_back = args.days_back if args.days_back is not None else args.lookback_days
     if days_back is not None:
         overrides["lookback_days"] = days_back
@@ -271,7 +586,19 @@ def main(argv=None) -> int:
         overrides["to_date"] = args.to_date
     if args.no_cancellations:
         overrides["enable_cancellation_fallback"] = False
+    if args.digest:
+        overrides["send_digest"] = True
+    if args.no_digest:
+        overrides["send_digest"] = False
+    if args.ticket_dir is not None:
+        overrides["ticket_dir"] = args.ticket_dir
+    if args.tickets_root is not None:
+        overrides["tickets_root"] = args.tickets_root
     config = make_config(**overrides) if overrides else default_config()
+    ticket_dir = resolve_ticket_scan_dir(
+        ticket_dir=config.ticket_dir if args.ticket_dir else None,
+        tickets_root=config.tickets_root,
+    )
 
     try:
         dates = resolve_run_dates(
@@ -300,20 +627,13 @@ def main(argv=None) -> int:
     if not creds_path and not os.environ.get("HSP_CREDENTIALS_FILE"):
         creds_path = _default_credentials_path()
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(message)s",
-        datefmt="%H:%M:%S",
-        stream=sys.stderr,
-        force=True,
-    )
     _progress(f"Analysing dates: {', '.join(dates)}")
     if creds_path:
         _progress(f"Credentials file: {creds_path}")
     elif os.environ.get("HSP_CREDENTIALS_FILE"):
         _progress(f"Credentials file: {os.environ['HSP_CREDENTIALS_FILE']}")
 
-    summary = run(
+    summary, day_results = run(
         config, dates, out_csv, out_json,
         cache_dir=args.cache_dir,
         credentials_path=creds_path,
@@ -323,6 +643,13 @@ def main(argv=None) -> int:
     print(f"Wrote {out_json}")
     if summary["not_analysed"]:
         print("Not analysed (FETCH_FAILED):", ", ".join(summary["not_analysed"]))
+
+    want_digest = config.send_digest and not args.no_digest
+    if want_digest:
+        digest_rc = _maybe_send_digest(
+            day_results, strict=args.digest_strict, credentials_path=creds_path)
+        if digest_rc != 0:
+            return digest_rc
     return 0
 
 
