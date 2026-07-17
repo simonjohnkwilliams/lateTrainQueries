@@ -427,3 +427,108 @@ def _gmail_vals_from_credentials_file(path: str | None) -> dict[str, str]:
         break
     return out
 
+
+# --- SWR Delay Repay portal (Epic 6 live) ------------------------------------
+
+SWR_DELAY_REPAY_URL = "https://delayrepay.southwesternrailway.com/"
+
+
+@dataclass(frozen=True)
+class SwrCredentials:
+    """SWR Delay Repay portal login (never logged)."""
+
+    username: str
+    password: str
+    base_url: str = SWR_DELAY_REPAY_URL
+
+
+@dataclass(frozen=True)
+class TicketFormDefaults:
+    """Paper-ticket fields for the SWR form (not secrets; still local-config)."""
+
+    ticket_price: str = ""
+    ticket_reference: str = ""
+
+
+class SwrConfigError(Exception):
+    """Raised when SWR portal credentials cannot be loaded."""
+
+
+def load_ticket_form_defaults(
+    environ: dict[str, str] | None = None,
+    credentials_path: str | None = None,
+) -> TicketFormDefaults:
+    """Load ticket price / 5-digit ref from env or ``## SWR … ##`` section.
+
+    Keys: ``SWR_TICKET_PRICE`` / ``ticket_price``, ``SWR_TICKET_REFERENCE`` /
+    ``ticket_reference`` (or ``ticket_number``). Empty if unset — live submit
+    must supply real values (delivery placeholders 12.50/12345 are wrong).
+    """
+    env = dict(os.environ if environ is None else environ)
+    file_vals = _swr_vals_from_credentials_file(credentials_path)
+    price = (
+        (env.get("SWR_TICKET_PRICE") or "").strip()
+        or file_vals.get("ticket_price", "")
+        or file_vals.get("price", "")
+    ).strip()
+    ref = (
+        (env.get("SWR_TICKET_REFERENCE") or "").strip()
+        or file_vals.get("ticket_reference", "")
+        or file_vals.get("ticket_number", "")
+        or file_vals.get("booking_reference", "")
+    ).strip()
+    return TicketFormDefaults(ticket_price=price, ticket_reference=ref)
+
+def load_swr_credentials(
+    environ: dict[str, str] | None = None,
+    credentials_path: str | None = None,
+) -> SwrCredentials:
+    """Load SWR portal login from env and/or ``## SWR Login ##`` / ``## SWR … ##``.
+
+    Keys: ``SWR_USERNAME`` / ``swr_username``, ``SWR_PASSWORD`` / ``swr_password``,
+    optional ``SWR_URL`` / ``url``.
+    """
+    env = dict(os.environ if environ is None else environ)
+    file_vals = _swr_vals_from_credentials_file(credentials_path)
+    user = (
+        (env.get("SWR_USERNAME") or "").strip()
+        or file_vals.get("swr_username", "")
+        or file_vals.get("username", "")
+        or file_vals.get("email", "")
+    ).strip()
+    password = (
+        (env.get("SWR_PASSWORD") or "")
+        or file_vals.get("swr_password", "")
+        or file_vals.get("password", "")
+    ).strip()
+    base = (
+        (env.get("SWR_URL") or "").strip()
+        or file_vals.get("url", "")
+        or SWR_DELAY_REPAY_URL
+    ).strip()
+    if not user or not password:
+        raise SwrConfigError(
+            "SWR credentials incomplete — set SWR_USERNAME/SWR_PASSWORD "
+            "or swr_username/swr_password under ## SWR Login ## "
+            "(or ## SWR Delay Repay ##) in the credentials file"
+        )
+    return SwrCredentials(
+        username=user, password=password, base_url=base.rstrip("/") + "/"
+    )
+
+
+def _swr_vals_from_credentials_file(path: str | None) -> dict[str, str]:
+    path = path or os.environ.get("HSP_CREDENTIALS_FILE")
+    if not path or not os.path.isfile(path):
+        return {}
+    try:
+        sections = parse_credentials_file(path)
+    except CredentialsError:
+        return {}
+    hit = (
+        _find_section(sections, "swr", "login")
+        or _find_section(sections, "swr", "delay")
+        or _find_section(sections, "swr")
+    )
+    return dict(hit[1]) if hit else {}
+

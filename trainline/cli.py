@@ -540,7 +540,25 @@ def _resolve_browser_session(*, live_submit: bool):
     if _file_browser_factory is not None:
         return _file_browser_factory()
     if live_submit:
-        return PlaywrightBrowserSession(headless=True)
+        import os
+
+        from trainline.adapters.config import SwrConfigError, load_swr_credentials
+
+        try:
+            swr = load_swr_credentials()
+        except SwrConfigError as exc:
+            raise RuntimeError(str(exc)) from exc
+        wait_s = int(os.environ.get("SWR_CAPTCHA_WAIT_SECONDS", "600"))
+        # OQ4: never unattended Submit — headed Review + human reCAPTCHA.
+        return PlaywrightBrowserSession(
+            username=swr.username,
+            password=swr.password,
+            base_url=swr.base_url,
+            headless=False,
+            click_submit=False,
+            dry_run_to_review=False,
+            human_captcha_wait_seconds=wait_s,
+        )
     return FakeBrowserSession()
 
 
@@ -593,6 +611,19 @@ def _file_claims(
         _progress("Nothing left to file after claimed/ filter.")
         return 0, file_summary
 
+    from trainline.adapters.config import load_ticket_form_defaults
+
+    ticket_defaults = load_ticket_form_defaults()
+    if live_submit and (
+        not ticket_defaults.ticket_price or not ticket_defaults.ticket_reference
+    ):
+        _progress(
+            "ERROR: live submit needs ticket_price and ticket_reference "
+            "(SWR_TICKET_PRICE / SWR_TICKET_REFERENCE or keys under ## SWR Delay Repay ##)."
+        )
+        file_summary["gate_ok"] = False
+        return 1, file_summary
+
     items = []
     for claim in claims:
         ticket = result.mapping.get(claim.date)
@@ -600,15 +631,29 @@ def _file_claims(
             _progress(f"ERROR: no ticket mapped for {claim.date}")
             file_summary["gate_ok"] = False
             return 1, file_summary
-        items.append((claim, map_claim_for_swr(claim), Path(ticket)))
+        items.append(
+            (
+                claim,
+                map_claim_for_swr(
+                    claim,
+                    ticket_price=ticket_defaults.ticket_price,
+                    ticket_reference=ticket_defaults.ticket_reference,
+                ),
+                Path(ticket),
+            )
+        )
 
     if not live_submit:
         _progress(
             "Filing via FakeBrowserSession (dry-run / offline). "
-            "Pass --live-submit for Playwright against SWR (OQ4)."
+            "Pass --live-submit for Playwright against SWR "
+            "(human reCAPTCHA gate; see OQ4)."
         )
     else:
-        _progress("Filing via Playwright (live SWR; OQ4 session/2FA still open).")
+        _progress(
+            "Filing via Playwright (live SWR). "
+            "Auto-fill to Review; human solves reCAPTCHA + Submit (OQ4)."
+        )
 
     session = _resolve_browser_session(live_submit=live_submit)
     batch = submit_all_claims(items, session, audit_path=audit_path)

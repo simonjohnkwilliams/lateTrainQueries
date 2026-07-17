@@ -65,28 +65,32 @@ python -m pytest
 3. Confirm stderr mentions `FakeBrowserSession`, stdout filing summary has `filed` ≥ 1, `Results/filing-audit.jsonl` has success lines, and matching tickets moved to `tickets/claimed/`.
 4. Confirm a second `--file` on the same week skips already-claimed dates.
 
-### MANUAL — live SWR (OQ3 / OQ4; do not leave unattended yet)
+### MANUAL — live SWR (OQ3 / OQ4)
 
 1. `playwright install chromium`
-2. Put SWR login details only in env / password manager — never in the repo.
+2. Put SWR login + **real** `ticket_price` / `ticket_reference` in
+   `creds/trainConfig.txt` under `## SWR Delay Repay ##` (never commit that file).
 3. Run one claim with:
    ```powershell
    python -m trainline --file --live-submit --from-date YYYY-MM-DD --to-date YYYY-MM-DD
    ```
-4. Watch the browser: journey date, stations, times, delay reason, ticket upload match `claims.csv`.
-5. Note whether login / 2FA blocks unattended runs (OQ4). Current live path **fills** the form but does **not** auto-click Submit until OQ4 is resolved.
+4. Watch the browser: journey/stations/times match `claims.csv`; solve reCAPTCHA
+   when the Windows alert appears; click Submit.
+5. **OQ4 (closed 2026-07-17):** unattended Submit is blocked by reCAPTCHA.
+   Policy = headed auto-fill to Review + human captcha/Submit.
 
 ## G. Residual MANUAL-only (cannot fully automate)
 
-1. **OQ3** — Confirm live SWR Delay Repay field labels/selectors match our mapping (update Playwright selectors if the site differs).
-2. **OQ4** — Decide session persistence / 2FA strategy before enabling unattended Submit.
+1. ~~**OQ3**~~ — closed 2026-07-17 (live claim `SWR-0218-108-579`).
+2. ~~**OQ4**~~ — closed 2026-07-17 (human reCAPTCHA gate).
 3. Confirm HSP password authenticates (`pytest -m live`).
 4. Eyeball one real `--classify-tickets` batch (ready vs rejected).
 5. Optional: refresh recorded HSP fixtures from a newer live capture.
+6. Set real ticket fare/number in config (or OCR them) before the next live file.
 
 ## Pass criteria for Release 2 Epic 6 on `release-2`
 
-- [ ] `python -m pytest` green (offline)
-- [ ] Dry-run `--file` produced a trusted audit + moved tickets
-- [ ] At least one manual compare of a claim row to the live SWR form (OQ3)
-- [ ] OQ4 notes captured (2FA / session) before enabling auto-Submit
+- [x] `python -m pytest` green (offline)
+- [x] Dry-run `--file` produced a trusted audit + moved tickets
+- [x] At least one manual compare of a claim row to the live SWR form (OQ3)
+- [x] OQ4 notes captured — human reCAPTCHA gate; see `epic-6-closeout-2026-07-17.md`

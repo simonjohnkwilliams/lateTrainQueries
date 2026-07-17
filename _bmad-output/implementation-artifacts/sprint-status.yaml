@@ -95,17 +95,23 @@ action_items:
   - epic: "1-3"
     action: "Resolve OQ2: verify band %, fare base, and stacking cap against one real SWR filing"
     owner: "Simon"
-    status: open
+    status: done
+    resolution: "2026-07-17 — return 15-29 = 12.5% of return fare; two claims/day allowed (outbound+inbound). See epic-6-closeout-2026-07-17.md"
   - epic: "6"
     action: "Resolve OQ4: SWR session persistence and 2FA impact on unattended --file runs"
     owner: "Simon"
+    status: done
+    resolution: "2026-07-17 — reCAPTCHA blocks unattended Submit; policy is headed fill-to-Review + human captcha/Submit alert. See epic-6-closeout-2026-07-17.md"
+  - epic: "6"
+    action: "Supply real ticket_price + ticket_reference (config/OCR) — live filing must not invent 12.50/12345"
+    owner: "Dev"
     status: open
   - epic: "7"
     action: "Copy GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET from financeTracker_SW into creds/trainConfig.txt ## Gmail API ##; run trainline gmail-auth once"
     owner: "Simon"
     status: open
   - epic: "7"
-    action: "After first live SWR claim email, replace placeholder inbox matchers (FR38)"
+    action: "After first live SWR claim email, replace placeholder inbox matchers (FR38) — claim id SWR-0218-108-579 observed"
     owner: "Simon"
     status: open
   - epic: "1-3"

@@ -1,0 +1,11 @@
+Architecture is frozen.
+
+Do not redesign the system.
+
+If implementation exposes an architectural issue:
+
+Explain it.
+
+Stop.
+
+Ask before changing architecture.

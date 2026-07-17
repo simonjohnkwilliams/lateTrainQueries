@@ -44,6 +44,7 @@ def test_fake_browser_fills_fields_and_returns_reference(tmp_path):
     assert result.swr_reference == "FAKE-SWR-0001"
     assert session.fills[0]["origin_station"] == "Godalming"
     assert session.fills[0]["ticket_path"] == str(ticket)
+    assert "wizard_steps" in session.fills[0]
 
 
 @pytest.mark.offline

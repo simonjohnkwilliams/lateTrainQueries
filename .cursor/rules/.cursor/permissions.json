@@ -1,0 +1,15 @@
+{
+    "autoRun": {
+      "allow_instructions": [
+        "Allow running project tests.",
+        "Allow formatting code.",
+        "Allow git status and git diff.",
+        "Allow reading any project file.",
+        "Allow Python scripts that are part of this repository.",
+        "Allow everything"
+      ],
+      "block_instructions": [
+        
+      ]
+    }
+  }
