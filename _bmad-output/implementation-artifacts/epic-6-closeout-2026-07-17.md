@@ -12,9 +12,10 @@ Live filing confirmed after human reCAPTCHA.
 - **Compensation:** BACS
 - **Ticket type/medium:** Return / Paper (correct)
 - **Ticket price / number filed:** were **placeholder** `12.50` / `12345` — **wrong**.
-  Live submit now **requires** `ticket_price` + `ticket_reference` from
-  `## SWR Delay Repay ##` or `SWR_TICKET_PRICE` / `SWR_TICKET_REFERENCE`.
-  OCR extraction of fare + 5-digit ref is a follow-up.
+  Fixed: vision OCR extracts `price` + `ticket_number` into a `*.meta.json` sidecar
+  at classify time; filing reads the sidecar (config/env only as fallback).
+  Rebuild the local model after pull:
+  `ollama create trainline-ticket -f trainline/adapters/ollama/Modelfile.ticket-reader`
 
 ## OQ3 — form mapping
 
