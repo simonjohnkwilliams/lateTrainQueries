@@ -20,6 +20,12 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from trainline.adapters import storage
+from trainline.adapters.claim_submission import (
+    DEFAULT_AUDIT_PATH,
+    FakeBrowserSession,
+    PlaywrightBrowserSession,
+    submit_all_claims,
+)
 from trainline.adapters.config import (
     EmailConfigError,
     default_config,
@@ -29,11 +35,14 @@ from trainline.adapters.config import (
 )
 from trainline.adapters.hsp_client import HspClient, fetch_day
 from trainline.adapters.notification import digest_subject, render_digest, send_digest
+from trainline.adapters.swr_mapping import map_claim_for_swr
 from trainline.adapters.ticket_gate import (
+    filter_claims_not_already_claimed,
     format_match_errors,
     gate_blocks_filing,
     load_claim_dates_from_json,
     match_tickets_to_claims,
+    move_to_claimed,
     resolve_ticket_scan_dir,
     scan_ticket_dir,
 )
@@ -56,6 +65,10 @@ DEFAULT_DAYS_BACK = 5
 
 # Injectable SMTP transport for offline tests (Story 4.3). ``None`` => real SMTP.
 _digest_transport = None
+
+# Injectable browser factory for ``--file`` offline tests (Story 6.4).
+# ``None`` => FakeBrowserSession, or Playwright when ``--live-submit``.
+_file_browser_factory = None
 
 
 def _today() -> date:
@@ -420,6 +433,7 @@ def _parse_args(argv):
             "  python -m trainline --days-back 3\n"
             "  python -m trainline --from-date 2026-07-07 --to-date 2026-07-11\n"
             "  python -m trainline --digest\n"
+            "  python -m trainline --file --from-date 2026-07-10 --to-date 2026-07-10\n"
         ),
     )
     parser.add_argument("--origin", help="Outbound origin CRS (default GOD)")
@@ -503,7 +517,123 @@ def _parse_args(argv):
             "(Epic 7; requires ## Gmail API ## in credentials file)"
         ),
     )
+    parser.add_argument(
+        "--file", dest="auto_file", action="store_true",
+        help=(
+            "After assess: ticket gate → map → batch submit → audit "
+            "(FakeBrowser by default; use --live-submit for Playwright)"
+        ),
+    )
+    parser.add_argument(
+        "--live-submit", dest="live_submit", action="store_true",
+        help="With --file: use Playwright against SWR (requires playwright + OQ4)",
+    )
+    parser.add_argument(
+        "--audit-path", dest="audit_path", default=None,
+        help=f"JSONL filing audit path (default: {DEFAULT_AUDIT_PATH})",
+    )
     return parser.parse_args(argv)
+
+
+def _resolve_browser_session(*, live_submit: bool):
+    """Composition-root browser seam (Fake offline; Playwright when live)."""
+    if _file_browser_factory is not None:
+        return _file_browser_factory()
+    if live_submit:
+        return PlaywrightBrowserSession(headless=True)
+    return FakeBrowserSession()
+
+
+def _file_claims(
+    day_results,
+    *,
+    ticket_dir: Path,
+    tickets_root: Path,
+    audit_path: Path,
+    live_submit: bool,
+) -> tuple[int, dict]:
+    """Ticket gate → map → batch submit → move claimed. Returns (exit_code, summary)."""
+    claims = [c for day in day_results for c in day.claims]
+    file_summary = {
+        "claims_found": len(claims),
+        "filed": 0,
+        "failed": 0,
+        "skipped_already_claimed": 0,
+        "audit_path": str(audit_path),
+        "gate_ok": True,
+        "browser": "live" if live_submit else "fake",
+    }
+    if not claims:
+        _progress("No claims to file.")
+        return 0, file_summary
+
+    layout = tickets_layout(tickets_root)
+    layout.ensure()
+    _progress(f"Ticket gate: scanning {ticket_dir.resolve()}")
+    scan = scan_ticket_dir(ticket_dir)
+    if scan.missing_directory:
+        _progress(f"WARNING: ticket directory does not exist: {ticket_dir}")
+    result = match_tickets_to_claims(claims, scan)
+    report = format_match_errors(result)
+    if gate_blocks_filing(result):
+        print(report, file=sys.stderr)
+        _progress("Ticket gate FAILED - assess output kept; submission skipped.")
+        file_summary["gate_ok"] = False
+        return 1, file_summary
+    print(report)
+    _progress("Ticket gate PASSED.")
+
+    before = len(claims)
+    claims = filter_claims_not_already_claimed(claims, layout.claimed)
+    skipped = before - len(claims)
+    file_summary["skipped_already_claimed"] = skipped
+    if skipped:
+        _progress(f"Skipping {skipped} claim(s) already under claimed/")
+    if not claims:
+        _progress("Nothing left to file after claimed/ filter.")
+        return 0, file_summary
+
+    items = []
+    for claim in claims:
+        ticket = result.mapping.get(claim.date)
+        if ticket is None:
+            _progress(f"ERROR: no ticket mapped for {claim.date}")
+            file_summary["gate_ok"] = False
+            return 1, file_summary
+        items.append((claim, map_claim_for_swr(claim), Path(ticket)))
+
+    if not live_submit:
+        _progress(
+            "Filing via FakeBrowserSession (dry-run / offline). "
+            "Pass --live-submit for Playwright against SWR (OQ4)."
+        )
+    else:
+        _progress("Filing via Playwright (live SWR; OQ4 session/2FA still open).")
+
+    session = _resolve_browser_session(live_submit=live_submit)
+    batch = submit_all_claims(items, session, audit_path=audit_path)
+    file_summary["filed"] = batch.filed
+    file_summary["failed"] = batch.failed
+    _progress(
+        f"Filing done: {batch.filed} filed, {batch.failed} failed "
+        f"(audit: {audit_path})"
+    )
+
+    moved: set[str] = set()
+    for submit_result, (_claim, _fields, ticket) in zip(batch.results, items):
+        if not submit_result.ok:
+            continue
+        key = str(ticket.resolve())
+        if key in moved:
+            continue
+        if not ticket.is_file():
+            continue
+        dest = move_to_claimed(ticket, layout.claimed)
+        moved.add(key)
+        _progress(f"Moved ticket -> {dest}")
+
+    exit_code = 1 if batch.failed else 0
+    return exit_code, file_summary
 
 
 def _run_gmail_auth() -> int:
@@ -644,13 +774,28 @@ def main(argv=None) -> int:
     if summary["not_analysed"]:
         print("Not analysed (FETCH_FAILED):", ", ".join(summary["not_analysed"]))
 
+    file_rc = 0
+    file_summary = None
+    if args.auto_file:
+        audit_path = Path(args.audit_path) if args.audit_path else (
+            out_dir / "filing-audit.jsonl"
+        )
+        file_rc, file_summary = _file_claims(
+            day_results,
+            ticket_dir=ticket_dir,
+            tickets_root=tickets_root,
+            audit_path=audit_path,
+            live_submit=bool(args.live_submit),
+        )
+        print(json.dumps({"filing": file_summary}, indent=2))
+
     want_digest = config.send_digest and not args.no_digest
     if want_digest:
         digest_rc = _maybe_send_digest(
             day_results, strict=args.digest_strict, credentials_path=creds_path)
         if digest_rc != 0:
             return digest_rc
-    return 0
+    return file_rc if args.auto_file else 0
 
 
 if __name__ == "__main__":

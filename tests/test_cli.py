@@ -97,6 +97,8 @@ def test_help_lists_digest_flags(capsys):
     assert "--ticket-dir" in help_text
     assert "--classify-tickets" in help_text
     assert "--tickets-root" in help_text
+    assert "--file" in help_text
+    assert "--live-submit" in help_text
 
 
 @pytest.mark.offline

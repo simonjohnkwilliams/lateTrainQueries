@@ -20,6 +20,8 @@ MODULES = [
     "trainline.adapters.notification",
     "trainline.adapters.ticket_gate",
     "trainline.adapters.ticket_intake",
+    "trainline.adapters.swr_mapping",
+    "trainline.adapters.claim_submission",
     "trainline.cli",
 ]
 

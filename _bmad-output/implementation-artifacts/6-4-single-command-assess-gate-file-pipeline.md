@@ -3,7 +3,7 @@ baseline_commit: 39617cf25ea411e81e34921380a255764ea8c406
 ---
 # Story 6.4: Single-command assess → gate → file pipeline
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 

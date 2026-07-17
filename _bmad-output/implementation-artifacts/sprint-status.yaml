@@ -75,11 +75,11 @@ development_status:
   5-6-gate-ready-to-claim-claimed-dedup: done
   epic-5b-retrospective: optional
 
-  epic-6: backlog
-  6-1-swr-field-mapping-at-submit: ready-for-dev
-  6-2-playwright-submission-adapter-single-claim: ready-for-dev
-  6-3-batch-auto-file-audit-log: ready-for-dev
-  6-4-single-command-assess-gate-file-pipeline: ready-for-dev
+  epic-6: done
+  6-1-swr-field-mapping-at-submit: done
+  6-2-playwright-submission-adapter-single-claim: done
+  6-3-batch-auto-file-audit-log: done
+  6-4-single-command-assess-gate-file-pipeline: done
   epic-6-retrospective: optional
 
   # Release 3 — weekly ops loop (blocked on Epic 6 for full chain; 7.1 Gmail started)

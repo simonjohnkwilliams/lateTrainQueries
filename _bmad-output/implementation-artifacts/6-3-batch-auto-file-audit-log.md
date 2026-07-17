@@ -3,7 +3,7 @@ baseline_commit: 39617cf25ea411e81e34921380a255764ea8c406
 ---
 # Story 6.3: Batch auto-file all claims + audit log
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 

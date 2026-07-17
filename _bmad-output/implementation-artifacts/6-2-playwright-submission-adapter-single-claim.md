@@ -3,7 +3,7 @@ baseline_commit: 39617cf25ea411e81e34921380a255764ea8c406
 ---
 # Story 6.2: Playwright submission adapter — single claim
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
