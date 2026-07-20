@@ -711,8 +711,8 @@ FR33: The assessment window is always the **previous** Mon–Fri five-day week r
 FR34: The weekly job chain is: assess lookback window → classify ticket inbox (Ollama) → match tickets to claims → auto-file eligible claims (Epic 6) → send ops email (last).
 FR35: Ops email is sent via **Gmail API** (OAuth), ported from `financeTracker_SW` patterns — not SMTP app-password as the long-term path (SMTP may remain as legacy until Gmail API is live).
 FR36: Ops email **Table 1 — this run:** late/claimable trains (same optimiser logic); tickets transformed/matched against those trains; rejection list with short reason + file path; newly filed claims and still-open claims.
-FR37: Ops email **Table 2 — follow-up:** all previously actioned claims that are not yet reported as successful in the last digest; status from Gmail inbox lookup (received / paid / failed / still in flight). Placeholder matchers until first live SWR confirmation emails are observed.
-FR38: Claim success is three-stage: (1) SWR submit success (Epic 6), (2) inbox confirmation that the claim was received, (3) follow-up ~1 week later for payment confirmation.
+FR37: Ops email **Table 2 — follow-up:** all previously actioned claims that are not yet reported as successful (paid) in the last digest; status from Gmail inbox lookup (received / approved / paid / failed / still in flight). Matchers characterised 2026-07-20 from claim `SWR-0218-108-579` (see `epic-7-fr38-inbox-contract-2026-07-20.md`).
+FR38: Claim success is three-stage: (1) SWR submit success (Epic 6), (2) inbox confirmation that the claim was received, (3) follow-up for payment confirmation (`PAYMENT SENT`). An intermediate `Approved` email is observed between (2) and (3) and updates Table 2 status but does not close the claim as successful.
 FR39: Idempotent weekly runs — re-running the same anchor Friday does not duplicate filing or re-report already-successful claims in Table 2.
 FR40: Gmail OAuth client id/secret and token path live under `creds/trainConfig.txt` (gitignored); token file on disk; never committed.
 
@@ -726,7 +726,7 @@ NFR13: Catch-up after missed Friday uses the same anchor-Friday window (FR33), n
 
 FR32–FR33, FR39: Epic 7 — schedule + window
 FR34–FR36: Epic 7 — weekly chain + Table 1
-FR37–FR38: Epic 7 — claim lifecycle + Table 2 (inbox placeholders)
+FR37–FR38: Epic 7 — claim lifecycle + Table 2 (matchers characterised 2026-07-20)
 FR40, NFR11: Epic 7 — Gmail API adapter port
 
 ## Epic 7: Weekly local ops loop (schedule + Gmail + lifecycle email)
@@ -803,17 +803,17 @@ So that I see both action needed now and payment outcomes later.
 **When** email is sent
 **Then** Table 1 lists late trains, matched tickets, rejections (reason+path), newly filed + open claims (FR36)
 
-**Given** prior actioned claims not yet reported successful
+**Given** prior actioned claims not yet reported successful (paid)
 **When** email is sent
-**Then** Table 2 lists them with status received / paid / failed / in flight (FR37)
+**Then** Table 2 lists them with status received / approved / paid / failed / in flight (FR37)
 
-**Given** a claim already reported successful in the last digest
+**Given** a claim already reported successful (paid) in the last digest
 **When** Table 2 is built
 **Then** that claim is omitted (FR37, FR39)
 
-**Given** first live SWR confirmation emails are not yet characterised
+**Given** SWR inbox mail characterised from claim `SWR-0218-108-579`
 **When** inbox matchers run
-**Then** placeholder rules are used and documented for refinement after first real filing (FR38)
+**Then** subjects `… - RECEIVED` / `… - Approved` / `… - PAYMENT SENT` from `No-replySWRDR@firstcustomercontact.com` map to received / approved / paid (FR38)
 
 ### Story 7.5: Claim lifecycle state store
 
@@ -830,3 +830,111 @@ So that Table 2 and idempotent runs stay correct across weeks.
 **Given** Gmail search finds a confirmation/payment (or placeholder)
 **When** state updates
 **Then** Table 2 reflects the new status on the next digest (FR37)
+
+---
+
+## Release 4 — Phone ticket intake (approved 2026-07-20)
+
+**Dependency:** Epic 7 weekly chain usable (`--weekly-ops` + Task Scheduler).  
+**Runtime:** Same local Windows box; phone is capture-only (no app store product required).  
+**Goal:** Photograph a ticket on the phone → file lands in `tickets/unclassified/` with no manual PC copy → existing classify (Epic 5b) + weekly ops take over.
+
+### Release 4 Functional Requirements
+
+FR41: Simon can capture a ticket photo on his phone and have it appear under `tickets/unclassified/` without USB cable or manual PC file copy.
+FR42: Intake is **idempotent** — re-delivery of the same photo does not create duplicate unclassified files (content hash or stable message/attachment id).
+FR43: Intake preserves a usable original filename or stamps a sortable name (`YYYYMMDD-HHMMSS-…`) compatible with the existing classify pipeline.
+FR44: Failed or unscannable drops are visible (log / optional notify) without crashing the weekly job.
+FR45: No secrets committed; any OAuth/token reuse stays under `creds/` (gitignored).
+
+### Release 4 Non-Functional Requirements
+
+NFR14: Prefer reusing existing Gmail API + Task Scheduler over a new cloud backend (aligns with cancelled Lambda).
+NFR15: Works when the PC was asleep at capture time (queue on phone/cloud/mail; drain when PC is up).
+NFR16: Offline unit tests for save/dedup; live phone/mail tests are opt-in.
+
+### Release 4 FR Coverage Map
+
+FR41, NFR14–NFR15: Epic 8 — intake transport  
+FR42–FR44: Epic 8 — drop pipeline + observability  
+FR45: Epic 8 — config/creds
+
+## Epic 8: Phone → unclassified ticket drop
+
+So that after a delayed journey Simon can snap the ticket on his phone and the weekly ops loop picks it up automatically.
+
+**Depends on:** Epic 5b classify folders; Epic 7 scheduler optional but recommended for drain cadence.
+
+### Options considered (pick primary in Story 8.1)
+
+| Option | How it works | Pros | Cons | Fit |
+| --- | --- | --- | --- | --- |
+| **A. Gmail ticket drop (recommended)** | Phone emails photo to a dedicated address/label (or self with subject tag). Small poller (`--ingest-ticket-mail` or scheduled) uses existing Gmail API, saves attachments → `tickets/unclassified/`. | Reuses Epic 7 Gmail; works away from home Wi‑Fi; queues while PC asleep; zero new phone apps | Poll delay (minutes); need subject/label convention | **Best default** |
+| **B. Syncthing / Resilio** | Phone folder syncs to PC path that is `unclassified` or a watched inbox. | Fast, local, no Google | Both devices online; setup; firewall | Strong alternative |
+| **C. OneDrive / Google Drive Camera Upload** | Cloud camera roll → PC sync client → folder watcher moves into `unclassified`. | Easy on phone | Cloud + path/AVG quirks; watcher required | OK if already in OneDrive |
+| **D. SMB share from phone file manager** | Map `\\PC\tickets\unclassified` and save there. | Direct | Same LAN/VPN; easy to mis-save | Manual / backup path |
+| **E. Custom phone app / PWA upload** | App POSTs to local API | Polished UX | Build + expose endpoint; cancelled-cloud spirit | **Out of scope** |
+
+**Recommendation:** Ship **A** as Epic 8 MVP; document **B or C** as optional “fast path” with a thin filesystem watcher (Story 8.3) so either transport ends in the same folder.
+
+### Story 8.1: Choose transport + Gmail drop MVP
+
+As Simon,
+I want to email myself a ticket photo and have it land in `unclassified`,
+So that I never USB-copy tickets again.
+
+**Acceptance Criteria:**
+
+**Given** a Gmail message matching the ticket-drop convention (label and/or subject prefix, e.g. `TICKET`) with an image attachment  
+**When** `python -m trainline --ingest-ticket-mail` runs (or the scheduled task)  
+**Then** each new image is written under `tickets/unclassified/` and the message is marked processed (label/read) so it is not ingested twice (FR41–FR43, FR45)
+
+**Given** the same message is seen again  
+**When** ingest runs  
+**Then** no second file is created (FR42)
+
+### Story 8.2: Dedup, naming, and safety
+
+As a developer,
+I want stable names and hash dedup,
+So that classify never sees duplicate junk.
+
+**Acceptance Criteria:**
+
+**Given** two deliveries of identical image bytes  
+**When** ingest runs  
+**Then** only one file remains in `unclassified` (FR42)
+
+**Given** a non-image or empty attachment  
+**When** ingest runs  
+**Then** it is skipped and logged; ingest exits 0 (FR44)
+
+### Story 8.3: Optional filesystem watcher (Syncthing / OneDrive)
+
+As Simon,
+I want a watched inbox folder as an alternate to email,
+So that Syncthing or OneDrive can feed the same pipeline.
+
+**Acceptance Criteria:**
+
+**Given** a new image appears in `tickets/inbox/` (or configured path)  
+**When** watcher / `--ingest-ticket-folder` runs  
+**Then** it is moved/copied into `tickets/unclassified/` with dedup (FR41–FR43)
+
+### Story 8.4: Phone setup doc + scheduled drain
+
+As Simon,
+I want a one-page phone setup and a scheduled ingest,
+So that Thursday photos are waiting before Friday weekly ops.
+
+**Acceptance Criteria:**
+
+**Given** the setup doc  
+**When** followed on Android/iPhone  
+**Then** a test photo arrives in `unclassified` within one daily drain (FR41, NFR15)
+
+**Given** Task Scheduler  
+**When** registered  
+**Then** ticket ingest runs **once per day** (e.g. morning CatchUp window) **and again immediately before** Friday `--weekly-ops` (compose: ingest → assess → classify → file → email) — no 15‑minute poller (NFR14)
+
+**Cadence (locked 2026-07-20):** once daily + pre-Friday weekly-ops hook. Not continuous polling.

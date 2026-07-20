@@ -44,12 +44,23 @@ class TicketsLayout:
     def claimed(self) -> Path:
         return self.root / "claimed"
 
+    @property
+    def inbox(self) -> Path:
+        """Optional Syncthing/OneDrive drop zone (Epic 8.3) before unclassified."""
+        return self.root / "inbox"
+
+    @property
+    def inbox_processed(self) -> Path:
+        return self.root / "inbox" / "processed"
+
     def ensure(self) -> None:
         for d in (
             self.unclassified,
             self.ready_to_claim,
             self.rejected,
             self.claimed,
+            self.inbox,
+            self.inbox_processed,
         ):
             d.mkdir(parents=True, exist_ok=True)
 

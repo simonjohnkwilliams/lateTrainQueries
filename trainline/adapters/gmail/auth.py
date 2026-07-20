@@ -21,6 +21,7 @@ from trainline.adapters.gmail.errors import GmailAuthError
 GMAIL_SCOPES = (
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/gmail.modify",
 )
 
 _REFRESH_SKEW_SECONDS = 60
@@ -35,8 +36,29 @@ class GmailConfig:
     digest_to: str
 
 
+def _inject_truststore() -> None:
+    """Honour OS/AVG TLS interception for Google HTTPS (same as HSP / client)."""
+    import os
+    from pathlib import Path
+
+    # Prefer project CA bundle (AVG MITM) so ``requests`` used by google-auth verifies.
+    ca = Path("creds") / "ca-bundle.pem"
+    if ca.is_file():
+        ca_path = str(ca.resolve())
+        os.environ.setdefault("REQUESTS_CA_BUNDLE", ca_path)
+        os.environ.setdefault("SSL_CERT_FILE", ca_path)
+        os.environ.setdefault("CURL_CA_BUNDLE", ca_path)
+    try:
+        import truststore
+
+        truststore.inject_into_ssl()
+    except ImportError:
+        pass
+
+
 def run_auth_flow(config: GmailConfig) -> Credentials:
     """Installed-app OAuth consent; returns fresh credentials."""
+    _inject_truststore()
     client_config: dict[str, Any] = {
         "installed": {
             "client_id": config.client_id,
@@ -74,11 +96,7 @@ def get_credentials(config: GmailConfig) -> Credentials:
         if expiry is not None and (
             expiry - datetime.now(UTC)
         ) < timedelta(seconds=_REFRESH_SKEW_SECONDS):
-            try:
-                import truststore
-                truststore.inject_into_ssl()
-            except ImportError:
-                pass
+            _inject_truststore()
             creds.refresh(Request())
             store_credentials(creds, config)
     return creds

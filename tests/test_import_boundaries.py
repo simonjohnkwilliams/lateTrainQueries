@@ -27,7 +27,7 @@ FORBIDDEN_IO = {
 ADAPTER_NAMES = {
     "hsp_client", "storage", "config", "notification", "ticket_gate", "ticket_intake",
     "swr_mapping", "claim_submission", "ollama_vision", "schedule_window",
-    "ticket_quality",
+    "ticket_quality", "weekly_marker", "ticket_drop",
 }
 
 

@@ -289,14 +289,22 @@ provisioning or Terraform. The seams/technical-how detail lives in
 3. Season-ticket band track (FR18 data model ready; logic deferred).
 4. ~~Ticket ingest adapter (auto-discover tickets without manual naming)~~ — largely covered by Ollama classify + folder workflow.
 
-**Release 3 — Local weekly ops loop (approved 2026-07-17)**
+**Release 3 — Local weekly ops loop (approved 2026-07-17; Epic 6 unblocked 2026-07-17)**
 
 - Friday / catch-up schedule for **prior** Mon–Fri week (FR32–FR33).
 - Chain: assess → classify → file (Epic 6) → Gmail ops email (FR34–FR36).
-- Claim lifecycle via Gmail inbox: received → paid, with Table 2 follow-up (FR37–FR38).
+- Claim lifecycle via Gmail inbox: received → approved → paid, with Table 2 follow-up (FR37–FR38; characterised 2026-07-20).
 - Gmail API port from financeTracker_SW (FR40).
-- See `../../epics.md` Epic 7. **Blocked on Epic 6.**
+- **Scope = Epic 7** (closed 2026-07-20). Rich Tables 1–2 / lifecycle store deferred; digest + FR38 characterisation accepted. See `../../implementation-artifacts/epic-7-closeout-2026-07-20.md`.
+- Deferred past R3 (unchanged): season-ticket band track (FR18); cloud deploy remains cancelled.
 
+**Release 4 — Phone → unclassified intake (approved 2026-07-20)**
+
+- Photograph ticket on phone → `tickets/unclassified/` without USB copy (FR41–FR45).
+- **Recommended MVP:** Gmail attachment drop reusing Epic 7 Gmail API.
+- **Cadence (locked 2026-07-20):** ingest **once daily** + **again immediately before** Friday `--weekly-ops` (not a frequent poller).
+- Optional: Syncthing/OneDrive + folder watcher.
+- **Scope = Epic 8.** See `../../epics.md` Epic 8. After Epic 8, project ops loop is complete for local use.
 ## 9. Open Questions & Assumptions
 
 - **OQ1 — RESOLVED (2026-07-15).** HSP exposes no cancellation flag — a cancelled

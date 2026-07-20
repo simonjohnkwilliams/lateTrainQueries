@@ -246,18 +246,107 @@ def summarise(day_results) -> dict:
     }
 
 
+_GMAIL_AUTH_HINT = (
+    "Gmail digest requires OAuth. Run: python -m trainline --gmail-auth "
+    "(needs ## Gmail API ## keys in the credentials file)"
+)
+
+
+class _GmailDigestHeaders:
+    """Duck-typed digest headers for ``send_digest`` (Gmail path; AD-2)."""
+
+    def __init__(self, digest_to: str, digest_from: str | None = None) -> None:
+        self.digest_to = digest_to
+        self.digest_from = digest_from
+        self.smtp_user = digest_to
+        self.smtp_host = ""
+        self.smtp_port = 0
+        self.smtp_password = ""
+
+
+def _try_gmail_digest_transport(credentials_path: str | None):
+    """Prefer Gmail API when configured.
+
+    Returns ``(header_config, transport)`` or ``None`` if Gmail is not configured.
+    Raises ``GmailAuthError`` when Gmail keys exist but the token is missing/unusable.
+    """
+    from trainline.adapters.config import GmailConfigError, load_gmail_config
+    from trainline.adapters.gmail.auth import GmailConfig, get_credentials
+    from trainline.adapters.gmail.client import GmailClient
+
+    try:
+        file_cfg = load_gmail_config(credentials_path=credentials_path)
+    except GmailConfigError:
+        return None
+
+    gmail_cfg = GmailConfig(
+        client_id=file_cfg.client_id,
+        client_secret=file_cfg.client_secret,
+        token_path=file_cfg.token_path,
+        digest_to=file_cfg.digest_to,
+    )
+    creds = get_credentials(gmail_cfg)
+    client = GmailClient(creds)
+
+    def transport(msg, _config):
+        client.send_message(msg)
+
+    return _GmailDigestHeaders(file_cfg.digest_to), transport
+
+
 def _maybe_send_digest(day_results, *, strict: bool, credentials_path: str | None = None) -> int:
-    """Send weekly digest. Returns 0 on success/best-effort fail; 1/2 on hard fail."""
+    """Send weekly digest via Gmail API (preferred) or SMTP fallback.
+
+    Returns 0 on success/best-effort fail; 1/2 on hard fail. Assess/classify
+    output is written before this runs — digest failure must not undo that.
+    """
+    from trainline.adapters.gmail.errors import GmailAuthError
+
+    html, text = render_digest(day_results)
+    subject = digest_subject(day_results)
+
+    # Offline test seam: injected transport keeps the SMTP config path (Story 4.3).
+    if _digest_transport is not None:
+        try:
+            email_cfg = load_email_config(credentials_path=credentials_path)
+        except EmailConfigError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        return _dispatch_digest(
+            subject, html, text, email_cfg, _digest_transport, strict=strict)
+
+    try:
+        prepared = _try_gmail_digest_transport(credentials_path)
+    except GmailAuthError as exc:
+        msg = str(exc).strip() or _GMAIL_AUTH_HINT
+        if "gmail-auth" not in msg.casefold():
+            msg = f"{msg}\n{_GMAIL_AUTH_HINT}"
+        if strict:
+            logging.error("Digest send failed (--digest-strict): %s", msg)
+            print(f"Digest send failed: {msg}", file=sys.stderr)
+            return 1
+        logging.warning("Digest send failed (best-effort): %s", msg)
+        print(f"Digest send failed (continuing): {msg}", file=sys.stderr)
+        return 0
+
+    if prepared is not None:
+        email_cfg, transport = prepared
+        return _dispatch_digest(
+            subject, html, text, email_cfg, transport, strict=strict)
+
+    # Legacy SMTP until Gmail is fully adopted (FR35).
     try:
         email_cfg = load_email_config(credentials_path=credentials_path)
     except EmailConfigError as exc:
-        print(str(exc), file=sys.stderr)
+        print(f"{exc}\n{_GMAIL_AUTH_HINT}", file=sys.stderr)
         return 2
-    html, text = render_digest(day_results)
-    subject = digest_subject(day_results)
+    return _dispatch_digest(
+        subject, html, text, email_cfg, None, strict=strict)
+
+
+def _dispatch_digest(subject, html, text, email_cfg, transport, *, strict: bool) -> int:
     try:
-        send_digest(
-            subject, html, text, email_cfg, transport=_digest_transport)
+        send_digest(subject, html, text, email_cfg, transport=transport)
     except Exception as exc:  # noqa: BLE001 - digest is best-effort unless strict
         if strict:
             logging.error("Digest send failed (--digest-strict): %s", exc)
@@ -519,6 +608,35 @@ def _parse_args(argv):
         ),
     )
     parser.add_argument(
+        "--weekly-ops", dest="weekly_ops", action="store_true",
+        help=(
+            "Friday/catch-up chain: prior-week assess → classify → file → "
+            "digest (FR32–FR34); skips if anchor Friday marker present (FR39)"
+        ),
+    )
+    parser.add_argument(
+        "--weekly-status", dest="weekly_status", action="store_true",
+        help="Print anchor Friday, prior-week window, and completion marker state",
+    )
+    parser.add_argument(
+        "--weekly-ops-force", dest="weekly_ops_force", action="store_true",
+        help="With --weekly-ops: ignore existing completion marker and re-run",
+    )
+    parser.add_argument(
+        "--ingest-ticket-mail", dest="ingest_ticket_mail", action="store_true",
+        help=(
+            "Download ticket photos from Gmail (subject TICKET…) into "
+            "tickets/unclassified/ (Epic 8)"
+        ),
+    )
+    parser.add_argument(
+        "--ingest-ticket-folder", dest="ingest_ticket_folder", action="store_true",
+        help=(
+            "Drain tickets/inbox/ images into tickets/unclassified/ "
+            "(Syncthing/OneDrive path; Epic 8.3)"
+        ),
+    )
+    parser.add_argument(
         "--file", dest="auto_file", action="store_true",
         help=(
             "After assess: ticket gate → map → batch submit → audit "
@@ -723,6 +841,345 @@ def _run_gmail_auth() -> int:
     return 0
 
 
+def _weekly_state_dir(out_dir: Path) -> Path:
+    return Path(out_dir) / "weekly"
+
+
+def _print_weekly_status(*, out_dir: Path, as_of: date | None = None) -> int:
+    """Print window + marker for Task Scheduler verification (FR32/FR33/FR39)."""
+    from trainline.adapters.schedule_window import anchor_friday, prior_working_week
+    from trainline.adapters.weekly_marker import is_complete, marker_path
+
+    as_of = as_of or _today()
+    anchor = anchor_friday(as_of)
+    start, end = prior_working_week(as_of)
+    state = _weekly_state_dir(out_dir)
+    done = is_complete(state, anchor)
+    payload = {
+        "as_of": as_of.isoformat(),
+        "anchor_friday": anchor.isoformat(),
+        "window_start": start.isoformat(),
+        "window_end": end.isoformat(),
+        "marker_path": str(marker_path(state, anchor)),
+        "complete": done,
+    }
+    print(json.dumps(payload, indent=2))
+    _progress(
+        f"Weekly status: anchor {anchor.isoformat()} window "
+        f"{start.isoformat()}..{end.isoformat()} complete={done}"
+    )
+    return 0
+
+
+def _run_weekly_assess(
+    *,
+    dates: list[str],
+    out_dir: Path,
+    cache_dir: str,
+    credentials_path: str | None,
+    config,
+) -> tuple[int, list]:
+    """Assess prior-week dates; returns (exit_code, day_results)."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_csv = str(out_dir / "claims.csv")
+    out_json = str(out_dir / "claims.json")
+    _progress(f"Weekly assess dates: {', '.join(dates)}")
+    summary, day_results = run(
+        config,
+        dates,
+        out_csv,
+        out_json,
+        cache_dir=cache_dir,
+        credentials_path=credentials_path,
+    )
+    print(json.dumps(summary, indent=2))
+    print(f"Wrote {out_csv}")
+    print(f"Wrote {out_json}")
+    return 0, day_results
+
+
+def _run_weekly_classify(*, tickets_root: Path) -> int:
+    return _run_classify_tickets(tickets_root=tickets_root)
+
+
+def _run_weekly_file(
+    *,
+    day_results,
+    ticket_dir: Path,
+    tickets_root: Path,
+    out_dir: Path,
+    live_submit: bool,
+    audit_path: Path | None,
+) -> int:
+    audit = audit_path or (Path(out_dir) / "filing-audit.jsonl")
+    file_rc, file_summary = _file_claims(
+        day_results,
+        ticket_dir=ticket_dir,
+        tickets_root=tickets_root,
+        audit_path=audit,
+        live_submit=live_submit,
+    )
+    print(json.dumps({"filing": file_summary}, indent=2))
+    return file_rc
+
+
+def _run_weekly_ops_email(
+    *,
+    day_results,
+    credentials_path: str | None,
+    strict: bool,
+) -> int:
+    """Send digest/ops email last (FR34). Tables 1–2 land in Story 7.4."""
+    return _maybe_send_digest(
+        day_results, strict=strict, credentials_path=credentials_path
+    )
+
+
+def _ticket_drop_hash_path(out_dir: Path) -> Path:
+    return Path(out_dir) / "ticket-drop-hashes.json"
+
+
+def _ingest_from_gmail_client(
+    client,
+    *,
+    dest_dir: Path,
+    hash_store_path: Path,
+    subject_prefix: str = "TICKET",
+    label: str | None = None,
+    ingested_label: str = "trainline-ticket-ingested",
+) -> int:
+    """Save Gmail ticket attachments into ``dest_dir`` (composition helper)."""
+    from trainline.adapters.gmail.ticket_mail import (
+        build_ticket_mail_query,
+        extract_image_attachments,
+    )
+    from trainline.adapters.ticket_drop import DropHashStore, unique_drop_path
+
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    store = DropHashStore(hash_store_path)
+    query = build_ticket_mail_query(
+        subject_prefix=subject_prefix,
+        label=label,
+        ingested_label=ingested_label,
+    )
+    _progress(f"Ticket mail query: {query}")
+    hits = client.search_messages(query, max_results=100)
+    if not hits:
+        _progress("No matching ticket emails.")
+        return 0
+
+    ingested_id = client.ensure_label_id(ingested_label)
+    saved = duplicates = skipped = 0
+    for hit in hits:
+        mid = hit.get("id")
+        if not mid:
+            continue
+        msg = client.get_message(mid)
+        refs = extract_image_attachments(msg)
+        if not refs:
+            skipped += 1
+            client.modify_message(
+                mid, add_label_ids=[ingested_id], remove_label_ids=["UNREAD"]
+            )
+            continue
+        for ref in refs:
+            data = client.get_attachment(mid, ref.attachment_id)
+            if not data:
+                skipped += 1
+                continue
+            path = unique_drop_path(dest_dir, data, ref.filename, store=store)
+            if path is None:
+                duplicates += 1
+                continue
+            path.write_bytes(data)
+            saved += 1
+            _progress(f"Saved ticket photo -> {path}")
+        client.modify_message(
+            mid, add_label_ids=[ingested_id], remove_label_ids=["UNREAD"]
+        )
+    _progress(
+        f"Ticket mail ingest: saved={saved} duplicates={duplicates} skipped={skipped}"
+    )
+    return 0
+
+
+def _run_ingest_ticket_mail(
+    *,
+    tickets_root: Path,
+    out_dir: Path,
+    credentials_path: str | None,
+) -> int:
+    """CLI entry: Gmail → tickets/unclassified/ (Epic 8.1)."""
+    from trainline.adapters.config import GmailConfigError, load_gmail_config
+    from trainline.adapters.gmail import GmailClient, GmailConfig, get_credentials
+    from trainline.adapters.gmail.errors import GmailAuthError, GmailError
+
+    layout = tickets_layout(tickets_root)
+    layout.ensure()
+    try:
+        file_cfg = load_gmail_config(credentials_path=credentials_path)
+    except GmailConfigError as exc:
+        _progress(f"ERROR: {exc}")
+        _progress(
+            "Hint: add ## Gmail API ## keys, then: python -m trainline --gmail-auth"
+        )
+        return 2
+    gmail_cfg = GmailConfig(
+        client_id=file_cfg.client_id,
+        client_secret=file_cfg.client_secret,
+        token_path=file_cfg.token_path,
+        digest_to=file_cfg.digest_to,
+    )
+    try:
+        creds = get_credentials(gmail_cfg)
+        client = GmailClient(creds)
+        return _ingest_from_gmail_client(
+            client,
+            dest_dir=layout.unclassified,
+            hash_store_path=_ticket_drop_hash_path(out_dir),
+            subject_prefix=os.environ.get("TICKET_MAIL_SUBJECT_PREFIX", "TICKET"),
+            label=(os.environ.get("TICKET_MAIL_LABEL") or "").strip() or None,
+            ingested_label=os.environ.get(
+                "TICKET_MAIL_INGESTED_LABEL", "trainline-ticket-ingested"
+            ),
+        )
+    except GmailAuthError as exc:
+        _progress(f"ERROR: {exc}")
+        _progress(
+            "If you just upgraded scopes, re-run: python -m trainline --gmail-auth"
+        )
+        return 2
+    except GmailError as exc:
+        msg = str(exc)
+        _progress(f"ERROR: Gmail ingest failed: {msg}")
+        if "insufficient" in msg.casefold() or "403" in msg:
+            _progress(
+                "Scopes may need gmail.modify — run: python -m trainline --gmail-auth"
+            )
+        return 2
+
+
+def _run_ingest_ticket_folder(
+    *,
+    tickets_root: Path,
+    out_dir: Path,
+) -> int:
+    """Drain tickets/inbox → unclassified (Epic 8.3)."""
+    from trainline.adapters.ticket_drop import ingest_folder_images
+
+    layout = tickets_layout(tickets_root)
+    layout.ensure()
+    summary = ingest_folder_images(
+        inbox_dir=layout.inbox,
+        dest_dir=layout.unclassified,
+        processed_dir=layout.inbox_processed,
+        hash_store_path=_ticket_drop_hash_path(out_dir),
+    )
+    _progress(
+        f"Folder ingest: saved={summary.saved} duplicates={summary.duplicates} "
+        f"skipped={summary.skipped}"
+    )
+    return 0
+
+
+def _mark_weekly_complete(state_dir: Path, anchor: date) -> None:
+    from trainline.adapters.weekly_marker import mark_complete
+
+    path = mark_complete(state_dir, anchor)
+    _progress(f"Weekly marker written: {path}")
+
+
+def _run_weekly_ops(
+    *,
+    out_dir: Path,
+    tickets_root: Path,
+    ticket_dir: Path,
+    cache_dir: str,
+    credentials_path: str | None,
+    live_submit: bool,
+    force: bool,
+    digest_strict: bool,
+    audit_path: Path | None = None,
+) -> int:
+    """Composition root for Friday / catch-up weekly chain (FR32–FR34, FR39)."""
+    from trainline.adapters.schedule_window import anchor_friday, prior_working_week
+    from trainline.adapters.weekly_marker import is_complete
+
+    as_of = _today()
+    anchor = anchor_friday(as_of)
+    start, end = prior_working_week(as_of)
+    dates = _weekdays_inclusive(start, end)
+    state_dir = _weekly_state_dir(out_dir)
+
+    _progress(
+        f"Weekly ops: as_of={as_of.isoformat()} anchor={anchor.isoformat()} "
+        f"window={start.isoformat()}..{end.isoformat()}"
+    )
+
+    if not force and is_complete(state_dir, anchor):
+        _progress(
+            f"Already complete for anchor {anchor.isoformat()} — skipping (FR39). "
+            "Use --weekly-ops-force to re-run."
+        )
+        return 0
+
+    config = default_config()
+    # Force digest on for the weekly chain (ops email last).
+    from dataclasses import replace
+
+    config = replace(config, send_digest=True)
+
+    ingest_rc = _run_ingest_ticket_mail(
+        tickets_root=tickets_root,
+        out_dir=out_dir,
+        credentials_path=credentials_path,
+    )
+    if ingest_rc != 0:
+        _progress("Weekly ops: ticket-mail ingest failed — not marking complete")
+        return ingest_rc
+
+    assess_rc, day_results = _run_weekly_assess(
+        dates=dates,
+        out_dir=out_dir,
+        cache_dir=cache_dir,
+        credentials_path=credentials_path,
+        config=config,
+    )
+    if assess_rc != 0:
+        return assess_rc
+
+    classify_rc = _run_weekly_classify(tickets_root=tickets_root)
+    if classify_rc != 0:
+        _progress("Weekly ops: classify failed — not marking complete")
+        return classify_rc
+
+    file_rc = _run_weekly_file(
+        day_results=day_results,
+        ticket_dir=ticket_dir,
+        tickets_root=tickets_root,
+        out_dir=out_dir,
+        live_submit=live_submit,
+        audit_path=audit_path,
+    )
+    if file_rc != 0:
+        _progress("Weekly ops: file step failed — not marking complete")
+        return file_rc
+
+    email_rc = _run_weekly_ops_email(
+        day_results=day_results,
+        credentials_path=credentials_path,
+        strict=digest_strict,
+    )
+    if email_rc != 0:
+        _progress("Weekly ops: email failed — not marking complete")
+        return email_rc
+
+    _mark_weekly_complete(state_dir, anchor)
+    return 0
+
+
 def main(argv=None) -> int:
     """CLI entry: config → hsp_client → optimise → storage → optional digest (AD-8)."""
     args = _parse_args(argv if argv is not None else sys.argv[1:])
@@ -737,10 +1194,44 @@ def main(argv=None) -> int:
     if getattr(args, "gmail_auth", False):
         return _run_gmail_auth()
 
+    if getattr(args, "weekly_status", False):
+        return _print_weekly_status(out_dir=out_dir)
+
+    creds_path_early = args.credentials_file
+    if not creds_path_early and not os.environ.get("HSP_CREDENTIALS_FILE"):
+        creds_path_early = _default_credentials_path()
+
+    if getattr(args, "ingest_ticket_mail", False):
+        return _run_ingest_ticket_mail(
+            tickets_root=tickets_root,
+            out_dir=out_dir,
+            credentials_path=creds_path_early,
+        )
+
+    if getattr(args, "ingest_ticket_folder", False):
+        return _run_ingest_ticket_folder(
+            tickets_root=tickets_root,
+            out_dir=out_dir,
+        )
+
     ticket_dir = resolve_ticket_scan_dir(
         ticket_dir=args.ticket_dir,
         tickets_root=tickets_root,
     )
+
+    if getattr(args, "weekly_ops", False):
+        audit_path = Path(args.audit_path) if args.audit_path else None
+        return _run_weekly_ops(
+            out_dir=out_dir,
+            tickets_root=tickets_root,
+            ticket_dir=ticket_dir,
+            cache_dir=args.cache_dir,
+            credentials_path=creds_path_early,
+            live_submit=bool(args.live_submit),
+            force=bool(getattr(args, "weekly_ops_force", False)),
+            digest_strict=bool(args.digest_strict),
+            audit_path=audit_path,
+        )
 
     if args.check_tickets:
         return _run_check_tickets(out_dir=out_dir, ticket_dir=ticket_dir)

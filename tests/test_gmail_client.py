@@ -103,3 +103,52 @@ def test_execute_raises_gmail_error_on_400(mock_service):
     mock_service.users().messages().list.return_value = list_mock
     with pytest.raises(GmailError):
         _client(mock_service).search_messages("q")
+
+
+@pytest.mark.offline
+def test_get_attachment_decodes_urlsafe_base64(mock_service):
+    raw = b"\xff\xd8\xff\xd9hello"
+    encoded = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    get_mock = MagicMock()
+    get_mock.execute.return_value = {"data": encoded}
+    mock_service.users().messages().attachments().get.return_value = get_mock
+    assert _client(mock_service).get_attachment("m1", "att1") == raw
+
+
+@pytest.mark.offline
+def test_modify_message_passes_label_ids(mock_service):
+    mod_mock = MagicMock()
+    mod_mock.execute.return_value = {"id": "m1"}
+    mock_service.users().messages().modify.return_value = mod_mock
+    _client(mock_service).modify_message(
+        "m1", add_label_ids=["L1"], remove_label_ids=["UNREAD"]
+    )
+    kwargs = mock_service.users().messages().modify.call_args.kwargs
+    assert kwargs["id"] == "m1"
+    assert kwargs["body"]["addLabelIds"] == ["L1"]
+    assert kwargs["body"]["removeLabelIds"] == ["UNREAD"]
+
+
+@pytest.mark.offline
+def test_ensure_label_id_creates_when_missing(mock_service):
+    list_mock = MagicMock()
+    list_mock.execute.return_value = {"labels": [{"id": "INBOX", "name": "INBOX"}]}
+    mock_service.users().labels().list.return_value = list_mock
+    create_mock = MagicMock()
+    create_mock.execute.return_value = {"id": "Label_42", "name": "trainline-ticket-ingested"}
+    mock_service.users().labels().create.return_value = create_mock
+    assert _client(mock_service).ensure_label_id("trainline-ticket-ingested") == "Label_42"
+
+
+@pytest.mark.offline
+def test_ca_certs_path_uses_local_bundle_without_env(tmp_path, monkeypatch):
+    """httplib2 needs ca_certs= — project bundle without manual env (NFR3)."""
+    from trainline.adapters.gmail.client import _ca_certs_path
+
+    monkeypatch.chdir(tmp_path)
+    for key in ("REQUESTS_CA_BUNDLE", "SSL_CERT_FILE"):
+        monkeypatch.delenv(key, raising=False)
+    ca = tmp_path / "creds" / "ca-bundle.pem"
+    ca.parent.mkdir(parents=True)
+    ca.write_text("-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----\n")
+    assert _ca_certs_path() == str(ca.resolve())

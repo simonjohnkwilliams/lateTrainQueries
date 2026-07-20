@@ -99,6 +99,48 @@ def test_help_lists_digest_flags(capsys):
     assert "--tickets-root" in help_text
     assert "--file" in help_text
     assert "--live-submit" in help_text
+    assert "--gmail-auth" in help_text
+    assert "--weekly-ops" in help_text
+    assert "--weekly-status" in help_text
+    assert "--ingest-ticket-mail" in help_text
+    assert "--ingest-ticket-folder" in help_text
+
+
+@pytest.mark.offline
+def test_ingest_ticket_mail_cli_uses_helper(monkeypatch, tmp_path, capsys):
+    called = {}
+
+    def fake_ingest(**kw):
+        called.update(kw)
+        return 0
+
+    monkeypatch.setattr(cli, "_run_ingest_ticket_mail", fake_ingest)
+    rc = cli.main([
+        "--ingest-ticket-mail",
+        "--tickets-root", str(tmp_path / "tickets"),
+        "--out-dir", str(tmp_path / "Results"),
+    ])
+    assert rc == 0
+    assert called["tickets_root"] == tmp_path / "tickets"
+    assert called["out_dir"] == tmp_path / "Results"
+
+
+@pytest.mark.offline
+def test_ingest_ticket_folder_cli_uses_helper(monkeypatch, tmp_path):
+    called = {}
+
+    def fake_folder(**kw):
+        called.update(kw)
+        return 0
+
+    monkeypatch.setattr(cli, "_run_ingest_ticket_folder", fake_folder)
+    rc = cli.main([
+        "--ingest-ticket-folder",
+        "--tickets-root", str(tmp_path / "tickets"),
+        "--out-dir", str(tmp_path / "Results"),
+    ])
+    assert rc == 0
+    assert called["tickets_root"] == tmp_path / "tickets"
 
 
 @pytest.mark.offline

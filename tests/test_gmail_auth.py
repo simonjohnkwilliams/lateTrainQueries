@@ -5,6 +5,7 @@ All Google API calls are mocked — no network.
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -66,6 +67,7 @@ def test_run_auth_flow_requests_readonly_and_send_scopes():
         scopes = mock_flow_cls.call_args[1]["scopes"]
         assert "https://www.googleapis.com/auth/gmail.readonly" in scopes
         assert "https://www.googleapis.com/auth/gmail.send" in scopes
+        assert "https://www.googleapis.com/auth/gmail.modify" in scopes
 
 
 @pytest.mark.offline
@@ -118,3 +120,34 @@ def test_get_credentials_refreshes_near_expiry(tmp_path):
         stale.refresh.assert_called_once()
         store.assert_called_once()
         assert got is stale
+
+
+@pytest.mark.offline
+def test_inject_truststore_sets_ca_bundle_without_manual_env(tmp_path, monkeypatch):
+    """AVG CA: project creds/ca-bundle.pem is applied via setdefault (NFR3)."""
+    from trainline.adapters.gmail.auth import _inject_truststore
+
+    monkeypatch.chdir(tmp_path)
+    for key in ("REQUESTS_CA_BUNDLE", "SSL_CERT_FILE", "CURL_CA_BUNDLE"):
+        monkeypatch.delenv(key, raising=False)
+    ca = tmp_path / "creds" / "ca-bundle.pem"
+    ca.parent.mkdir(parents=True)
+    ca.write_text("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n")
+    _inject_truststore()
+    assert Path(os.environ["REQUESTS_CA_BUNDLE"]).resolve() == ca.resolve()
+    assert Path(os.environ["SSL_CERT_FILE"]).resolve() == ca.resolve()
+
+
+@pytest.mark.offline
+def test_inject_truststore_does_not_override_existing_env(tmp_path, monkeypatch):
+    from trainline.adapters.gmail.auth import _inject_truststore
+
+    monkeypatch.chdir(tmp_path)
+    other = tmp_path / "other.pem"
+    other.write_text("x")
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(other))
+    ca = tmp_path / "creds" / "ca-bundle.pem"
+    ca.parent.mkdir(parents=True)
+    ca.write_text("y")
+    _inject_truststore()
+    assert os.environ["REQUESTS_CA_BUNDLE"] == str(other)
