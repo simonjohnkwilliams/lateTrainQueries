@@ -1,10 +1,10 @@
 # generated: 2026-07-16
-# last_updated: 2026-07-27
+# last_updated: 2026-07-27 (Epic 9 complete)
 # project: lateTrainQueries
 # project_key: NOKEY
 # tracking_system: file-system
 # story_location: {project-root}/_bmad-output/implementation-artifacts
-# release: 6 (Epic 9 claim lifecycle / Table 2; Epic 8 phone intake still open)
+# release: 6 (Epic 9 claim lifecycle / Table 2 — done; Epic 8 phone intake still open)
 
 # STATUS DEFINITIONS:
 # ==================
@@ -100,11 +100,11 @@ development_status:
   epic-8-retrospective: optional
 
   # Release 6 — Table 2 + claim lifecycle (supersedes deferred 7-4 / 7-5)
-  epic-9: in-progress
+  epic-9: done
   9-1-claim-lifecycle-store: done
   9-2-record-submitted-on-live-file: done
-  9-3-gmail-lifecycle-refresh: in-progress
-  9-4-table2-ops-email-weekly-chain: backlog
+  9-3-gmail-lifecycle-refresh: done
+  9-4-table2-ops-email-weekly-chain: done
   epic-9-retrospective: optional
 
 action_items:

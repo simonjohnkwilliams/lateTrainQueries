@@ -734,6 +734,112 @@ def _record_lifecycle_submissions(audit_path: Path, batch, items) -> None:
         )
 
 
+# Injectable Gmail client factory for ``_refresh_claim_lifecycle`` offline
+# tests (Story 9.3). ``None`` => build GmailClient from the credentials file.
+_lifecycle_gmail_client_factory = None
+
+
+def _default_lifecycle_path_for_out_dir(out_dir: Path | None) -> Path:
+    """Lifecycle store path for a weekly-ops out_dir (AD-18)."""
+    base = Path(out_dir) if out_dir is not None else Path("Results")
+    return Path(base) / "claim-lifecycle.json"
+
+
+def _build_lifecycle_gmail_client(credentials_path: str | None):
+    """Construct a GmailClient for lifecycle refresh, or ``None`` if Gmail
+    is not configured (best-effort — Story 9.3)."""
+    if _lifecycle_gmail_client_factory is not None:
+        return _lifecycle_gmail_client_factory()
+    from trainline.adapters.config import GmailConfigError, load_gmail_config
+    from trainline.adapters.gmail import GmailClient, GmailConfig, get_credentials
+
+    try:
+        file_cfg = load_gmail_config(credentials_path=credentials_path)
+    except GmailConfigError:
+        return None
+    gmail_cfg = GmailConfig(
+        client_id=file_cfg.client_id,
+        client_secret=file_cfg.client_secret,
+        token_path=file_cfg.token_path,
+        digest_to=file_cfg.digest_to,
+    )
+    creds = get_credentials(gmail_cfg)
+    return GmailClient(creds)
+
+
+def _refresh_claim_lifecycle(
+    *,
+    lifecycle_path: Path,
+    credentials_path: str | None,
+    client=None,
+) -> int:
+    """Best-effort Gmail → ``apply_stage`` refresh (AD-19, FR38; Story 9.3).
+
+    Only ``open_for_table2`` rows are refreshed — reported-paid rows have
+    already left Table 2. Gmail/parse failures warn and continue. Never
+    raises: returns 0 even on failure so the weekly chain keeps going.
+    """
+    from trainline.adapters.claim_lifecycle import LifecycleStore
+    from trainline.adapters.gmail.claim_mail import (
+        ClaimMailStage,
+        parse_gmail_message,
+        swr_claim_search_query,
+    )
+
+    path = Path(lifecycle_path)
+    if not path.is_file():
+        return 0
+    store = LifecycleStore(path)
+    open_rows = store.open_for_table2()
+    if not open_rows:
+        return 0
+
+    if client is None:
+        client = _build_lifecycle_gmail_client(credentials_path)
+        if client is None:
+            _progress(
+                "Lifecycle refresh skipped: Gmail not configured "
+                "(add ## Gmail API ## keys + python -m trainline --gmail-auth)"
+            )
+            return 0
+
+    for row in open_rows:
+        try:
+            query = swr_claim_search_query(row.claim_id)
+            hits = client.search_messages(query, max_results=20)
+            for hit in hits:
+                mid = hit.get("id")
+                if not mid:
+                    continue
+                msg = client.get_message(mid)
+                parsed = parse_gmail_message(msg)
+                if parsed is None:
+                    continue
+                if parsed.claim_id != row.claim_id:
+                    continue
+                if parsed.stage is ClaimMailStage.UNKNOWN:
+                    continue
+                store.apply_stage(row.claim_id, parsed.stage.value)
+        except Exception as exc:  # noqa: BLE001 - best-effort refresh
+            _progress(
+                f"WARNING: lifecycle refresh failed for {row.claim_id}: {exc}"
+            )
+            continue
+    return 0
+
+
+def _run_weekly_lifecycle_refresh(
+    *,
+    out_dir: Path,
+    credentials_path: str | None,
+) -> int:
+    """Weekly-chain wrapper for ``_refresh_claim_lifecycle`` (Story 9.3)."""
+    return _refresh_claim_lifecycle(
+        lifecycle_path=_default_lifecycle_path_for_out_dir(out_dir),
+        credentials_path=credentials_path,
+    )
+
+
 def _file_claims(
     day_results,
     *,
@@ -1079,6 +1185,47 @@ def _claimable_rows_for_ops(day_results) -> list[dict]:
     return rows
 
 
+def _build_table2(*, out_dir: Path | None = None, lifecycle_path: Path | None = None) -> tuple[list[dict], list[str]]:
+    """Render-time Table 2 rows from the lifecycle store (AD-20, Story 9.4).
+
+    Returns ``(rows, paid_claim_ids_in_table)``. ``submitted`` displays as
+    ``in_flight`` (presentation only); the store value is unchanged. Paid
+    rows still appear until ``mark_reported_paid`` runs after the send.
+    """
+    from trainline.adapters.claim_lifecycle import LifecycleStore
+
+    path = lifecycle_path or _default_lifecycle_path_for_out_dir(out_dir)
+    if not Path(path).is_file():
+        return [], []
+    store = LifecycleStore(path)
+    rows: list[dict] = []
+    paid_ids: list[str] = []
+    for r in store.open_for_table2():
+        display = "in_flight" if r.status == "submitted" else r.status
+        rows.append(
+            {
+                "claim_id": r.claim_id,
+                "status": display,
+                "journey_date": r.date,
+            }
+        )
+        if r.status == "paid":
+            paid_ids.append(r.claim_id)
+    return rows, paid_ids
+
+
+def _mark_paid_reported_after_email(*, out_dir: Path, claim_ids: list[str]) -> None:
+    """Stamp ``reported_paid_at`` for paid rows just sent in Table 2 (AD-20)."""
+    if not claim_ids:
+        return
+    from trainline.adapters.claim_lifecycle import LifecycleStore
+
+    path = _default_lifecycle_path_for_out_dir(out_dir)
+    if not Path(path).is_file():
+        return
+    LifecycleStore(path).mark_reported_paid(claim_ids)
+
+
 def _run_weekly_ops_email(
     *,
     day_results,
@@ -1086,8 +1233,15 @@ def _run_weekly_ops_email(
     strict: bool,
     filing_summary: dict | None = None,
     anchor_friday: str | None = None,
-) -> int:
-    """Send ops email last (FR34/FR36 Table 1). Table 2 deferred."""
+    out_dir: Path | None = None,
+) -> tuple[int, list[str]]:
+    """Send ops email last (FR34/FR36 Table 1 + Table 2; Story 9.4).
+
+    Returns ``(exit_code, paid_claim_ids_sent)`` so the chain can call
+    ``mark_reported_paid`` for the paid rows that appeared in the sent
+    Table 2. Table 1 always renders; Table 2 only when the store has
+    open rows.
+    """
     from trainline.adapters.ops_email import ops_email_subject, render_ops_email
 
     filing_summary = filing_summary or {}
@@ -1103,7 +1257,10 @@ def _run_weekly_ops_email(
         "rejections": list(filing_summary.get("rejections") or []),
     }
     anchor = anchor_friday or "unknown"
-    html, text = render_ops_email(table1=table1, table2=None, anchor_friday=anchor)
+    table2, paid_ids_sent = _build_table2(out_dir=out_dir)
+    html, text = render_ops_email(
+        table1=table1, table2=table2, anchor_friday=anchor
+    )
     subject = ops_email_subject(
         anchor_friday=anchor,
         filed=int(filing_summary.get("filed") or 0),
@@ -1120,7 +1277,7 @@ def _run_weekly_ops_email(
             encoding="utf-8",
         )
         _progress(f"Ops email written to {path} (TRAINLINE_OPS_EMAIL_FILE)")
-        return 0
+        return 0, paid_ids_sent
 
     # Reuse digest transport path with pre-rendered body
     from trainline.adapters.config import EmailConfigError, load_email_config
@@ -1131,17 +1288,17 @@ def _run_weekly_ops_email(
             gmail_headers, transport = prepared
             send_digest(subject, html, text, gmail_headers, transport=transport)
             _progress(f"Ops email sent to {gmail_headers.digest_to}")
-            return 0
+            return 0, paid_ids_sent
         email_cfg = load_email_config(credentials_path=credentials_path)
         send_digest(subject, html, text, email_cfg)
         _progress(f"Ops email sent to {email_cfg.digest_to}")
-        return 0
+        return 0, paid_ids_sent
     except EmailConfigError as exc:
         _progress(f"Ops email skipped: {exc}")
-        return 1 if strict else 0
+        return (1 if strict else 0), paid_ids_sent
     except Exception as exc:
         _progress(f"Ops email failed: {exc}")
-        return 1 if strict else 0
+        return (1 if strict else 0), paid_ids_sent
 
 
 def _ticket_drop_hash_path(out_dir: Path) -> Path:
@@ -1490,16 +1647,28 @@ def _run_weekly_ops(
         _progress("Weekly ops: file step failed — not marking complete")
         return file_rc
 
-    email_rc = _run_weekly_ops_email(
+    # Best-effort lifecycle refresh before ops email (Story 9.3, AD-21).
+    # Gmail/parse failures warn and continue — must not block Table 1 email.
+    _run_weekly_lifecycle_refresh(
+        out_dir=out_dir,
+        credentials_path=credentials_path,
+    )
+
+    email_rc, sent_paid_ids = _run_weekly_ops_email(
         day_results=day_results,
         credentials_path=credentials_path,
         strict=digest_strict,
         filing_summary=file_summary,
         anchor_friday=anchor.isoformat(),
+        out_dir=out_dir,
     )
     if email_rc != 0:
         _progress("Weekly ops: email failed — not marking complete")
         return email_rc
+
+    # Mark paid claims that were just sent in Table 2 (Story 9.4, AD-20).
+    # No-op when the sent Table 2 had no paid rows (keeps chain order stable).
+    _mark_paid_reported_after_email(out_dir=out_dir, claim_ids=sent_paid_ids)
 
     _mark_weekly_complete(state_dir, anchor)
     return 0
