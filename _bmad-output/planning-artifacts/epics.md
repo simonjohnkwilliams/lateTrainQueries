@@ -2,16 +2,21 @@
 stepsCompleted:
   - step-01-validate-prerequisites
   - step-02-design-epics
+stepsCompletedPrior:
+  - step-01-validate-prerequisites
+  - step-02-design-epics
   - step-03-create-stories
   - step-04-final-validation
-release: 2
-release_tag: v1.0.0
+release: 6
+release_tag: pending
+focus: Table 2 claim lifecycle (FR37–FR39; AD-18–AD-21)
 inputDocuments:
   - '_bmad-output/planning-artifacts/prds/prd-lateTrainQueries-2026-07-14/prd.md'
   - '_bmad-output/planning-artifacts/prds/prd-lateTrainQueries-2026-07-14/addendum.md'
   - '_bmad-output/planning-artifacts/architecture/architecture-lateTrainQueries-2026-07-14/ARCHITECTURE-SPINE.md'
-  - '_bmad-output/implementation-artifacts/epic-1-3-retro-2026-07-15.md'
+  - '_bmad-output/implementation-artifacts/epic-7-fr38-inbox-contract-2026-07-20.md'
 discovery_date: 2026-07-16
+updated: 2026-07-27
 ---
 
 # lateTrainQueries - Epic Breakdown
@@ -711,9 +716,9 @@ FR33: The assessment window is always the **previous** Mon–Fri five-day week r
 FR34: The weekly job chain is: assess lookback window → classify ticket inbox (Ollama) → match tickets to claims → auto-file eligible claims (Epic 6) → send ops email (last).
 FR35: Ops email is sent via **Gmail API** (OAuth), ported from `financeTracker_SW` patterns — not SMTP app-password as the long-term path (SMTP may remain as legacy until Gmail API is live).
 FR36: Ops email **Table 1 — this run:** late/claimable trains (same optimiser logic); tickets transformed/matched against those trains; rejection list with short reason + file path; newly filed claims and still-open claims.
-FR37: Ops email **Table 2 — follow-up:** all previously actioned claims that are not yet reported as successful (paid) in the last digest; status from Gmail inbox lookup (received / approved / paid / failed / still in flight). Matchers characterised 2026-07-20 from claim `SWR-0218-108-579` (see `epic-7-fr38-inbox-contract-2026-07-20.md`).
-FR38: Claim success is three-stage: (1) SWR submit success (Epic 6), (2) inbox confirmation that the claim was received, (3) follow-up for payment confirmation (`PAYMENT SENT`). An intermediate `Approved` email is observed between (2) and (3) and updates Table 2 status but does not close the claim as successful.
-FR39: Idempotent weekly runs — re-running the same anchor Friday does not duplicate filing or re-report already-successful claims in Table 2.
+FR37: Ops email **Table 2 — follow-up:** all previously actioned claims that are not yet **reported** as successful (paid) in a sent digest; status from Gmail inbox lookup (received / approved / paid / failed / still in flight). Matchers characterised 2026-07-20 from claim `SWR-0218-108-579` (see `epic-7-fr38-inbox-contract-2026-07-20.md`). Architecture AD-20: include rows with `reported_paid_at` null; after successful email, mark paid rows reported.
+FR38: Claim success is three-stage: (1) SWR submit success (Epic 6), (2) inbox confirmation that the claim was received, (3) follow-up for payment confirmation (`PAYMENT SENT`). An intermediate `Approved` email is observed between (2) and (3) and updates Table 2 status but does not close the claim as successful. Subject shape: `South Western Railway Delay Repay - Claim {SWR-####-###-###} - {STAGE}` from `No-replySWRDR@firstcustomercontact.com`.
+FR39: Idempotent weekly runs — re-running the same anchor Friday does not duplicate filing or re-report already-successful claims in Table 2 (via `reported_paid_at` / marker semantics).
 FR40: Gmail OAuth client id/secret and token path live under `creds/trainConfig.txt` (gitignored); token file on disk; never committed.
 
 ### Release 3 Non-Functional Requirements
@@ -941,7 +946,196 @@ So that Thursday photos are waiting before Friday weekly ops.
 
 ---
 
-## Deferred / next epic (locked 2026-07-27)
+## Deferred after Release 6 (locked 2026-07-27)
 
-- **Paper-ticket image preprocessor** (deskew / rotate / crop orange fare strip / higher vision `max_edge`) before Ollama — improves APTIS paper OCR; not required for digital tickets once SWR Booking Confirmation PDF ingest supplies fare.
-- **Ops email Table 2** claim lifecycle follow-up (FR37–FR38) remains next after booking-confirmation + live sign-off.
+- **Paper-ticket image preprocessor** (deskew / rotate / crop orange fare strip / higher vision `max_edge`) before Ollama — improves APTIS paper OCR when no booking PDF supplies fare.
+- Season-ticket band track (FR18); SQLite lifecycle; cloud deploy (cancelled).
+
+---
+
+## Release 6 — Table 2 + claim lifecycle (next stage; extraction 2026-07-27)
+
+**Goal:** Wire FR37–FR39 into `--weekly-ops` using architecture AD-18–AD-21. Table 1 already ships; inbox parsers already ship (`claim_mail`).
+
+### Release 6 focus FRs (already inventoried above)
+
+- **FR37** — Table 2 follow-up until **reported** paid  
+- **FR38** — three-stage success + Approved intermediate; use characterised matchers  
+- **FR39** — idempotent Table 2 / no re-report after `reported_paid_at`
+
+### Additional Requirements (Architecture AD-18–AD-21)
+
+- **AD-18 Claim lifecycle store:** new `adapters/claim_lifecycle.py`; path `Results/claim-lifecycle.json`; persisted statuses `submitted|received|approved|paid|failed`; fields include `reported_paid_at`; audit JSONL remains append-only history. `[ASSUMPTION]` JSON not SQLite.
+- **AD-19 Mutation ownership:** only `cli` writes lifecycle; on successful live file → `record_submitted`; before email → Gmail search + pure `claim_mail` parse → `apply_stage` with monotonic rank `submitted < received < approved < paid` (`failed` terminal). No adapter→adapter imports.
+- **AD-20 Table 1+2 one email:** `ops_email` stays pure; `cli` builds Table 2 via `open_for_table2()` (`reported_paid_at` null); after successful send → `mark_reported_paid` for paid rows shown; display may map `submitted` → `in_flight`.
+- **AD-21 Weekly chain:** ingest → assess → classify → file → **lifecycle refresh (best-effort)** → ops email → mark reported → marker. Refresh failure must not skip Table 1 email.
+- **Inbox contract:** RECEIVED / Approved / PAYMENT SENT; surface `approved` in Table 2 (not collapsed into in_flight).
+- **TDD (AD-12):** stories test-first with offline pytest; live `@gmail` opt-in only.
+- **Out of scope this release:** paper-ticket image preprocessor; season-ticket band track; SQLite; cloud.
+
+### UX Design Requirements
+
+None — solo command-line / email text+HTML tables only (no product UI).
+
+### FR Coverage Map (Release 6 / Epic 9)
+
+FR37: Epic 9 — Table 2 follow-up until reported paid  
+FR38: Epic 9 — inbox stages RECEIVED / Approved / PAYMENT SENT  
+FR39: Epic 9 — idempotent Table 2 via `reported_paid_at`
+
+### Epic List (Release 6 addition)
+
+### Epic 9: Claim follow-up until paid
+After SWR filing, Simon sees prior claims move through received → approved → paid in the weekly ops email (Table 2), and paid claims drop off once reported in a sent digest.
+**FRs covered:** FR37, FR38, FR39
+
+**Supersedes:** Epic 7 stories 7.4 / 7.5 (deferred) — do not implement those story files; use 9.1–9.4 instead.
+**Dependency order:** 9.1 → 9.2 → 9.3 → 9.4 (no forward deps). Per AD-12, each story's GWT below is the offline pytest contract (fail → pass).
+
+### Story 9.1: Claim lifecycle store
+
+As a developer,
+I want a durable local claim-lifecycle JSON store with monotonic stage updates and Table 2 query helpers,
+So that later stories can record filings, refresh from Gmail, and build idempotent Table 2 without inventing persistence.
+
+**Acceptance Criteria:**
+
+**Given** the package
+**When** `trainline.adapters.claim_lifecycle` is imported
+**Then** it exposes `LifecycleStore`, default path `Results/claim-lifecycle.json`, and persisted statuses only `submitted|received|approved|paid|failed` (AD-18)
+
+**Given** an empty store path under a temp dir
+**When** `record_submitted(claim_id, date, direction, …)` runs for `SWR-0218-108-579`
+**Then** `get(claim_id)` returns status `submitted` with `date`, `direction`, `updated_at` set and `reported_paid_at` null (AD-18, AD-19)
+
+**Given** a claim at `submitted`
+**When** `apply_stage` is called with `received`, then `approved`, then `paid`
+**Then** status advances monotonically through that rank and never skips backwards (AD-19, FR38)
+
+**Given** a claim already at `paid`
+**When** `apply_stage` is called with `received` (or any lower rank)
+**Then** status remains `paid` (AD-19)
+
+**Given** a claim at `failed`
+**When** `apply_stage` is called with any non-failed stage
+**Then** status remains `failed` (terminal) (AD-19)
+
+**Given** one paid claim marked via `mark_reported_paid` and one open claim
+**When** `open_for_table2()` is called
+**Then** the reported-paid claim is omitted and the open claim is included (FR37, FR39, AD-20)
+
+**Given** a paid claim that has **not** been `mark_reported_paid`
+**When** `open_for_table2()` is called
+**Then** that claim is still included (FR39 — omit only after reported)
+
+**Given** `record_submitted` is called twice for the same claim id
+**When** the store is listed
+**Then** exactly one record exists (idempotent upsert by claim id)
+
+**Given** the store module source
+**When** inspected
+**Then** it does not import `gmail` or `playwright` (AD-2, AD-19)
+
+**Given** offline pytest (`@pytest.mark.offline`)
+**When** the default suite runs
+**Then** all Story 9.1 store tests pass with zero network (AD-12, NFR11)
+
+### Story 9.2: Record submitted on successful live file
+
+As Simon,
+I want a successful SWR file to create/update a lifecycle `submitted` row,
+So that Table 2 can show in-flight claims before any inbox mail arrives.
+
+**Acceptance Criteria:**
+
+**Given** a successful live `--file` / weekly file result that yields an SWR claim id
+**When** CLI composition finishes the success path
+**Then** it calls `LifecycleStore.record_submitted(claim_id, date, direction, …)` once (AD-19)
+
+**Given** a headed fill that stops before Submit (captcha abandon / no confirmation id)
+**When** the file path completes without success
+**Then** no lifecycle `submitted` row is created (AD-19)
+
+**Given** filing audit JSONL already appends a success line
+**When** lifecycle is updated
+**Then** audit remains append-only history and is not rewritten as status (AD-16, AD-18)
+
+**Given** offline tests with a fake submit success DTO
+**When** the CLI success hook runs
+**Then** the store under a temp `Results/claim-lifecycle.json` contains `submitted` for that claim id (AD-12)
+
+**Given** this story
+**When** implemented
+**Then** it does **not** call Gmail refresh, render Table 2, or `mark_reported_paid` (those are 9.3 / 9.4)
+
+### Story 9.3: Gmail lifecycle refresh via claim_mail
+
+As Simon,
+I want `--weekly-ops` (and an explicit refresh path) to update claim stages from SWR inbox mail,
+So that Table 2 reflects RECEIVED / Approved / PAYMENT SENT before the ops email is built.
+
+**Acceptance Criteria:**
+
+**Given** known claim ids in the lifecycle store
+**When** CLI runs lifecycle refresh
+**Then** it searches Gmail, parses via pure `parse_swr_claim_mail` / `parse_gmail_message`, and calls `apply_stage(claim_id, stage)` — store does not import Gmail (AD-19, FR38)
+
+**Given** subject stages RECEIVED / Approved / PAYMENT SENT from `No-replySWRDR@firstcustomercontact.com`
+**When** parsed
+**Then** they map to store statuses `received` / `approved` / `paid` using existing `ClaimMailStage` values (inbox contract 2026-07-20)
+
+**Given** Gmail or parse fails during `--weekly-ops`
+**When** refresh is best-effort
+**Then** a warning is logged and the chain continues with store state as-is — Table 1 email is not skipped (AD-21)
+
+**Given** offline tests
+**When** a mocked Gmail client returns fixture claim messages
+**Then** store statuses advance without network (AD-12)
+
+**Given** live characterisation
+**When** marked `@gmail` and explicitly opted in
+**Then** optional live tests may hit the real inbox; default `python -m pytest -q --tb=line` stays offline
+
+**Given** this story
+**When** implemented
+**Then** it does **not** require Table 2 rendering or `mark_reported_paid` (Story 9.4); refresh may be invocable from CLI helpers used by 9.4
+
+### Story 9.4: Table 2 in ops email + weekly chain
+
+As Simon,
+I want the weekly ops email to include Table 2 from open lifecycle rows and to mark paid rows reported after a successful send,
+So that I see follow-up until paid and never re-report the same paid claim (FR37, FR39).
+
+**Acceptance Criteria:**
+
+**Given** lifecycle rows with `reported_paid_at` null
+**When** CLI builds Table 2 for `render_ops_email`
+**Then** rows include claim id, journey date, and status; store `submitted` is displayed as `in_flight` in the email only (AD-20)
+
+**Given** statuses `received`, `approved`, `paid`, `failed`, and display `in_flight`
+**When** Table 2 is rendered
+**Then** `approved` is surfaced (not collapsed into in_flight) (inbox contract)
+
+**Given** `--weekly-ops`
+**When** the chain runs
+**Then** order is ingest → assess → classify → file → **lifecycle refresh** → ops email (Table 1 + Table 2) → `mark_reported_paid` for paid rows included → completion marker (AD-21)
+
+**Given** ops email send succeeds and Table 2 included one or more `paid` rows
+**When** post-send runs
+**Then** `mark_reported_paid` sets `reported_paid_at` for those claim ids only (FR39, AD-20)
+
+**Given** the next weekly run after those rows were reported
+**When** Table 2 is built
+**Then** previously reported paid claims are omitted; still-open / unreported-paid rows remain (FR37, FR39)
+
+**Given** lifecycle refresh fails but Table 1 data is available
+**When** email sends
+**Then** Table 1 still sends; Table 2 uses store-as-is; marker only after email success (AD-21)
+
+**Given** offline tests
+**When** fixtures feed `open_for_table2` → render → fake successful send → `mark_reported_paid`
+**Then** omission and chain order are asserted with zero network (AD-12)
+
+**Given** `ops_email.render_ops_email`
+**When** wired
+**Then** it remains a pure renderer with no Gmail or lifecycle imports (AD-2, AD-20)

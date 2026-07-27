@@ -1,0 +1,6 @@
+---
+alwaysApply: true
+description: Architecture freeze guardrail for this repository.
+---
+
+Architecture is frozen. Do not redesign the system.

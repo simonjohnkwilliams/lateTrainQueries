@@ -166,6 +166,24 @@ assess → storage (CSV/JSON) → ticket_gate → claim_submission (batch) → a
 
 Default `python -m trainline` unchanged (assess-only). Ticket gate failure: write output, skip submit, non-zero exit.
 
+## Shipped ops loop (mechanism notes, 2026-07-27)
+
+Not PRD capabilities — transport/how for architecture and implementers:
+
+| Concern | Decision |
+| --- | --- |
+| Weekly chain | `--weekly-ops`: ingest → assess → classify → file → ops email; marker under `Results/weekly/` |
+| Partial tickets | Default: file days with tickets, skip missing; `--strict-all-tickets` restores FR25 whole-week block |
+| Ops email Table 1 | Claimable / newly filed / skipped / surplus (FR36 subset); Table 2 still open |
+| Digital fare gap | Wallet screenshots often omit price; `SWR Booking Confirmation` PDF text layer has price + Out/Ret |
+| Booking ingest | Gmail query without Primary filter; subject contains `SWR Booking Confirmation`; archive like TICKET mail |
+| PDF on SWR form | Medium `E-ticket/M-ticket`; upload success text may omit “Image” |
+| Captcha | Headed Playwright to Review; human Submit (OQ4) |
+| Scheduler | Daily ingest 09:00; catch-up 09:30; Friday weekly 18:00 |
+
+Inbox lifecycle contract (for upcoming Table 2): see
+`../../implementation-artifacts/epic-7-fr38-inbox-contract-2026-07-20.md`.
+
 ## SWR claim form — field mapping & constraints (for FR13 / OQ3)
 
 Published SWR online claim form requires: journey date; origin and destination;

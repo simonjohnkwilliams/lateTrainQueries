@@ -1,0 +1,25 @@
+{
+  "completed": [],
+  "fingerprint": "3d8dd81c1f590fc72ac7077c80f5fef9",
+  "last_apply_at": "",
+  "last_audit_at": "2026-07-21T10:29:39Z",
+  "last_block_reason": "",
+  "last_plan_at": "2026-07-21T10:29:39Z",
+  "outstanding": [
+    {
+      "optimisation_id": "opt:DUP001",
+      "title": "Merge duplicated architectural guidance"
+    },
+    {
+      "optimisation_id": "opt:ACT002",
+      "title": "Add activation frontmatter"
+    },
+    {
+      "optimisation_id": "opt:ACT001",
+      "title": "Review dormant rules"
+    }
+  ],
+  "psa_version": "0.1.0",
+  "schema_version": "1.0.0",
+  "status": "idle"
+}

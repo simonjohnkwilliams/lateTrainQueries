@@ -1,0 +1,69 @@
+{
+  "created_at": "2026-07-21T13:28:55Z",
+  "items": [
+    {
+      "conflicts_with": [],
+      "effort": "Small",
+      "id": "ADV001",
+      "kind": "advise",
+      "paths": [
+        ".cursor/rules/architecture.mdc",
+        ".cursor/rules/bmad-builder.mdc",
+        ".cursor/rules/implementation.mdc"
+      ],
+      "reason": "Instruction assets are only under .cursor/rules. Agents that do not load Cursor rules (e.g. CLAUDE.md / AGENTS.md consumers) see no project instructions. A thin root pointer or dual-surface policy would close that gap without changing Cursor behaviour.",
+      "rule_seed_id": "SURF001",
+      "rule_seed_idea": "Flag repos that have Cursor rules but zero root Instruction Assets (CLAUDE.md/AGENTS.md/copilot-instructions).",
+      "title": "Expose a root instruction entry for non-Cursor agents"
+    },
+    {
+      "conflicts_with": [],
+      "effort": "Small",
+      "id": "ADV002",
+      "kind": "advise",
+      "paths": [
+        ".cursor/rules/bmad-builder.mdc"
+      ],
+      "reason": "bmad-builder.mdc requires reading _bmad-output/planning-artifacts paths before code changes, but does not say what to do if those paths are absent or incomplete. Agents may invent planning context or proceed silently.",
+      "rule_seed_id": "REF001",
+      "rule_seed_idea": "Detect instruction references to _bmad-output/ (or similar) without nearby absence/stop language.",
+      "title": "Define behaviour when BMAD planning artefacts are missing"
+    },
+    {
+      "conflicts_with": [],
+      "effort": "Medium",
+      "id": "ADV003",
+      "kind": "advise",
+      "paths": [
+        ".cursor/rules/architecture.mdc",
+        ".cursor/rules/bmad-builder.mdc",
+        ".cursor/rules/implementation.mdc"
+      ],
+      "reason": "architecture.mdc is a durable freeze policy; bmad-builder/implementation mix workflow steps with similar stop/ask language. Structuring architecture as stable policy and keeping story ceremony in workflow-only rules improves prefix reuse and clarity \u2014 beyond the existing DUP001 architectural-duplicate finding.",
+      "rule_seed_id": "ROLE001",
+      "rule_seed_idea": "Classify rule files as policy vs workflow via headings/keywords; flag policy files that embed multi-step story ceremony.",
+      "title": "Separate durable architecture freeze from story workflow steps"
+    },
+    {
+      "conflicts_with": [
+        "ACT002",
+        "ACT001"
+      ],
+      "effort": "Small",
+      "id": "ADV004",
+      "kind": "conflict",
+      "paths": [
+        ".cursor/rules/architecture.mdc"
+      ],
+      "reason": "architecture.mdc lacks YAML frontmatter and sibling rules use alwaysApply:false \u2014 deterministic ACT002/ACT001 already cover activation metadata and dormant-rule review on the outstanding plan.",
+      "rule_seed_id": "",
+      "rule_seed_idea": "",
+      "title": "Do not treat missing frontmatter as a new Advise item"
+    }
+  ],
+  "notes": "Judgment for lateTrainQueries \u2014 excludes ACT001/ACT002/DUP001 already on the plan.",
+  "psa_version": "1.0.0",
+  "repository": "lateTrainQueries",
+  "schema_version": "1.0.0",
+  "summary_theme": "Possible missing multi-agent instruction surface and BMAD path failure handling"
+}

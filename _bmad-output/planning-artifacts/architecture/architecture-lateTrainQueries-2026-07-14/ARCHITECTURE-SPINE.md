@@ -4,15 +4,16 @@ type: architecture-spine
 purpose: build-substrate
 altitude: feature
 paradigm: 'hexagonal (ports & adapters) with a pure-function domain core'
-scope: 'Release 1 MVP + Release 2 roadmap adapters (notification, ticket gate, claim submission). Infra/deployment explicitly out of scope.'
+scope: 'Releases 1–5 shipped substrate + next-stage claim lifecycle / ops Table 2 (FR37–FR39). Infra/cloud out of scope.'
 status: final
 created: '2026-07-14'
-updated: '2026-07-16'
-release: 2
-binds: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, FR8, FR9, FR10, FR11, FR12, FR13, FR14, FR15, FR16, FR17, FR18, FR19, FR20, FR21, FR22, FR23, FR24, FR25, FR26, FR27, FR28, FR29, FR30, FR31, NFR1, NFR2, NFR3, NFR4, NFR5, NFR6, NFR7, NFR8, NFR9, NFR10]
+updated: '2026-07-27'
+release: 6
+binds: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, FR8, FR9, FR10, FR11, FR12, FR13, FR14, FR15, FR16, FR17, FR18, FR19, FR20, FR21, FR22, FR23, FR24, FR25, FR26, FR27, FR28, FR29, FR30, FR31, FR32, FR33, FR34, FR36, FR37, FR38, FR39, FR40, FR41, FR42, FR43, FR44, FR45, NFR1, NFR2, NFR3, NFR4, NFR5, NFR6, NFR7, NFR8, NFR9, NFR10, NFR11, NFR12, NFR13, NFR14, NFR15]
 sources:
   - '../../prds/prd-lateTrainQueries-2026-07-14/prd.md'
   - '../../prds/prd-lateTrainQueries-2026-07-14/addendum.md'
+  - '../../implementation-artifacts/epic-7-fr38-inbox-contract-2026-07-20.md'
 companions: []
 ---
 
@@ -84,6 +85,9 @@ graph TD
     cli --> notif[adapters/notification]
     cli --> tgate[adapters/ticket_gate]
     cli --> csub[adapters/claim_submission]
+    cli --> ops[adapters/ops_email]
+    cli --> life[adapters/claim_lifecycle]
+    cli --> gmail[adapters/gmail]
     cli --> engine[engine: optimise/delay/models]
     hsp --> models[engine.models]
     storage --> models
@@ -132,6 +136,26 @@ graph TD
 - **Prevents:** multiple divergent filing orchestration paths
 - **Rule:** `--file` runs: assess → storage → ticket_gate → claim_submission (batch) → audit → notification (digest). Ticket gate failure: output written, submit skipped, non-zero exit. Default run (no `--file`) is Release 1 assess-only. `cli` is still the sole orchestrator; adapters never call each other.
 
+### AD-18 — Claim lifecycle store `[ADOPTED 2026-07-27]`
+- **Binds:** `adapters/claim_lifecycle`, `cli`; FR37, FR38, FR39
+- **Prevents:** mutable status living in `filing-audit.jsonl`, or `ops_email` inventing claim state
+- **Rule:** New adapter `claim_lifecycle` owns **current** claim status keyed by SWR claim id (`SWR-####-###-###`). Default path `Results/claim-lifecycle.json` (single JSON object map). **Persisted statuses only:** `submitted` | `received` | `approved` | `paid` | `failed`. Record fields: `claim_id`, `status`, `date`, `direction`, optional `amount_gbp`, `updated_at`, and `reported_paid_at` (ISO timestamp or null). **Filing audit (AD-16) stays append-only history** and is never rewritten as status. `[ASSUMPTION]` JSON file (not SQLite) until concurrency appears. Table 2 display may label `submitted` as `in_flight` — that label is presentation only, not a store value.
+
+### AD-19 — Lifecycle mutation ownership `[ADOPTED 2026-07-27]`
+- **Binds:** `cli`, `claim_lifecycle`, `gmail.claim_mail` (pure parse), Gmail client; FR37, FR38, AD-2, AD-8
+- **Prevents:** two writers of status, or adapters importing each other
+- **Rule:** Only `cli` mutates lifecycle. (1) On **successful** live file: `record_submitted(claim_id, date, direction, …)` from the submit result. (2) Before ops email: Gmail search → `parse_swr_claim_mail` / `parse_gmail_message` → `apply_stage(claim_id, stage)`. **Monotonic rank:** `submitted` < `received` < `approved` < `paid`; `failed` is terminal and does not advance further; never regress. `claim_lifecycle` does **not** import Gmail; `claim_mail` stays pure string→DTO. Optional one-shot backfill from audit success lines is a **cli** helper that uses the audit's `swr_reference` field only (no alternate claim-id extractors).
+
+### AD-20 — Ops email Table 1 + Table 2 `[ADOPTED 2026-07-27]`
+- **Binds:** `adapters/ops_email`, `cli`; FR36, FR37, FR39
+- **Prevents:** a second email path or the renderer owning Gmail/lifecycle I/O
+- **Rule:** One weekly ops email. `ops_email.render_ops_email(table1, table2, …)` remains a **pure** renderer. `cli` builds Table 2 from `claim_lifecycle.open_for_table2()`: include rows where `reported_paid_at` is null (still open **or** paid but not yet shown in a sent digest). After a successful ops email send, `cli` calls `mark_reported_paid()` for every Table 2 row that was sent with status `paid`. Display may map `submitted` → `in_flight` in the email only.
+
+### AD-21 — Weekly ops chain includes lifecycle refresh `[ADOPTED 2026-07-27]`
+- **Binds:** `cli` `--weekly-ops`; FR34, FR37, FR39, AD-8, AD-17
+- **Prevents:** emailing Table 2 before inbox refresh, or marking the week complete without attempting lifecycle+email
+- **Rule:** `--weekly-ops` order: ticket ingest → assess → classify → file → **lifecycle refresh** → ops email (Table 1 + Table 2) → `mark_reported_paid` for paid rows included → completion marker. Lifecycle refresh is **best-effort**: Gmail/parse failures log a warning and Table 2 uses store state as-is; they do not skip Table 1 email. Marker only after the email step succeeds. `--file` alone may `record_submitted` but does not require Gmail refresh.
+
 ## Consistency Conventions
 
 | Concern | Convention |
@@ -146,10 +170,13 @@ graph TD
 | Name | Version |
 | --- | --- |
 | Python | 3.10+ (dev on 3.12) |
-| requests | >=2.31 |
+| requests | >=2.25 (pinned in `requirements-dev.txt`) |
 | pytest | >=7.0 |
 | pytest-bdd | >=7.0 |
-| playwright | >=1.40 (Release 2 — claim submission) |
+| playwright | >=1.40 |
+| Pillow | >=10.0 |
+| pdfplumber | >=0.11 (booking confirmation PDF text) |
+| google-api-python-client / google-auth* | Gmail adapter (see `requirements-dev.txt`) |
 
 ## Structural Seed
 
@@ -167,9 +194,12 @@ trainline/
     ticket_gate.py       #   ticket scan + claim match (AD-14, FR23-25)
     swr_mapping.py       #   pure CRS/reason mapping (AD-15, FR27)
     claim_submission.py  #   Playwright SWR submit + audit (AD-15,16, FR26-29)
-  cli.py                 # composition root — assess and --file pipelines (AD-8,17)
+    ops_email.py         #   pure Table1/Table2 renderer (AD-20)
+    claim_lifecycle.py   #   mutable claim status store (AD-18,19)
+    gmail/               #   OAuth client + claim_mail parse + ticket_mail
+  cli.py                 # composition root — assess, --file, --weekly-ops (AD-8,17,21)
 tests/
-  ...                    # offline + @live gated; import-boundary test extended (NFR7)
+  ...                    # offline + @live/@gmail gated; import-boundary test extended (NFR7)
 ```
 
 Data flow (Release 2 `--file` run):
@@ -184,8 +214,26 @@ graph LR
     CLI --> T[ticket_gate]
     T -->|mapping| CS[claim_submission]
     CS --> A[(filing-audit.jsonl)]
+    CLI -->|on success| L[claim_lifecycle]
+    L --> LC[(claim-lifecycle.json)]
     CLI --> N[notification]
     S --> N
+```
+
+Data flow (`--weekly-ops` with Table 2):
+
+```mermaid
+graph LR
+    CLI[cli weekly-ops] --> ING[ticket ingest]
+    ING --> ASS[assess]
+    ASS --> CL[classify]
+    CL --> FILE[file + audit]
+    FILE -->|submitted| LIFE[claim_lifecycle]
+    CLI --> GMAIL[gmail search]
+    GMAIL -->|parse stages| LIFE
+    LIFE -->|open claims| OPS[ops_email]
+    FILE -->|table1| OPS
+    OPS --> MAIL[(one ops email)]
 ```
 
 Data flow (Release 1 default — unchanged):
@@ -216,14 +264,20 @@ graph LR
 | FR26–FR28 SWR auto-file + mapping | `adapters/claim_submission`, `adapters/swr_mapping` | AD-15, AD-2 |
 | FR29 filing audit | `adapters/claim_submission` | AD-16 |
 | FR30–FR31 `--file` pipeline | `cli` | AD-17, AD-8 |
+| FR32–FR34, FR40 weekly ops + Gmail | `cli`, `adapters/gmail`, `weekly_marker` | AD-8, AD-21 |
+| FR36 Table 1 ops email | `adapters/ops_email`, `cli` | AD-20 |
+| FR37–FR39 Table 2 + lifecycle | `adapters/claim_lifecycle`, `gmail.claim_mail`, `cli` | AD-18, AD-19, AD-20, AD-21 |
+| FR41–FR45 phone / booking ingest | `gmail.ticket_mail`, `booking_pdf`, `ticket_drop` | AD-2, AD-8 |
 
 ## Deferred
 
-- **Infra / deployment / AWS / Terraform** — deferred past Release 2 (PRD §8).
-- **Photo → OCR ticket read** — deferred; Release 2 uses manual naming only.
+- **Infra / deployment / AWS / Terraform** — cancelled for product; local Windows + Task Scheduler only.
+- **Paper-ticket image preprocessor** — after Table 2; deskew/crop fare strip for APTIS OCR when no booking PDF.
 - **Season-ticket band track** — FR18 data model ready; logic deferred.
-- **Ticket ingest adapter** (auto-discover without naming) — deferred.
-- **Lambda handler** — second composition root; deferred until cloud phase.
-- **OQ1 — cancellation JSON shape — RESOLVED (2026-07-15).** AD-6 flag on by default.
-- **OQ2 — payout base & claim stacking** — pre-provisioned in AD-10/11; may close in parallel with Release 2.
-- **OQ4 — SWR session / 2FA** — open; revisit at first live `--file` run.
+- **SQLite / multi-writer lifecycle** — revisit if JSON store contention appears.
+- **Explicit SWR failure-mail → `failed` status** — characterise when a real failure sample exists; until then missing inbox stages remain `submitted` (shown as `in_flight` in Table 2).
+- **Lambda handler** — second composition root; not planned.
+- ~~OQ1 cancellation~~ — resolved; AD-6 on by default.
+- ~~OQ2 payout base / stacking~~ — resolved 2026-07-17 (12.5% of return; two claims/day).
+- ~~OQ4 captcha~~ — resolved; headed fill-to-Review + human Submit.
+- ~~Photo OCR / ticket ingest / booking PDF~~ — shipped Releases 4–5.

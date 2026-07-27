@@ -1,0 +1,20 @@
+---
+alwaysApply: false
+---
+
+You are implementing a project that has already completed BMAD planning.
+
+The planning artefacts are the source of truth.
+
+Before changing code always:
+
+1. Read _bmad-output/planning-artifacts/briefs
+2. Read _bmad-output/planning-artifacts/architecture
+3. Read epics.md
+4. Read the implementation artefact for the current story
+
+Do not redesign the architecture.
+
+Implement only the requested story.
+
+Keep changes as small as possible.

@@ -2,8 +2,8 @@
 title: Late Train Query Engine — PRD
 status: final
 created: 2026-07-14
-updated: 2026-07-16
-release: 2
+updated: 2026-07-27
+release: 5
 ---
 
 # Late Train Query Engine — PRD
@@ -18,10 +18,18 @@ It queries the National Rail HSP (Historic Service Performance) API for what
 actually ran on the route, then runs a **payout-maximising optimisation** over
 *every* train that day — not the trains Simon caught, but the trains he *could*
 have caught on an **open day return** ticket. The MVP produces correct,
-hand-fileable claim data. **Release 1 (v1.0.0)** delivered this MVP. **Release 2**
-adds weekly email digest, ticket-artifact gating, and hands-off SWR auto-filing.
-The long game (roadmap, §8) remains photograph-to-payout with minimal
-intervention.
+hand-fileable claim data.
+
+**Where we are (2026-07-27).** Releases 1–5 are shipped on `master` (latest
+**v2.1.1** / `release-5`). The local weekly loop runs on Task Scheduler: daily
+ticket ingest, daily catch-up, Friday `--weekly-ops`. Live filing works with
+human reCAPTCHA. Digital wallet screenshots alone omit fare; **SWR Booking
+Confirmation PDFs** supply price/ref and Out/Ret legs. Ops email **Table 1**
+(claimable / filed / skipped / surplus) ships today; **Table 2** (claim
+lifecycle follow-up until paid) is the next stage.
+
+The long game remains photograph-to-payout with minimal intervention — Table 2
+closes the “did I get paid?” gap.
 
 **Why now / why this rewrite.** No product today answers the real question —
 *"given everything that ran on my route this week, what is the maximum I can
@@ -46,8 +54,9 @@ replaces that behaviour with the claimable-delay model in §4.
 |---|--------|--------|
 | SM1 | For a chosen week, every claim row the tool emits checks out when Simon verifies it against the SWR site before filing | 100% of emitted rows valid |
 | SM2 | On a periodic spot-check, days the tool emitted nothing for that manual inspection of the same HSP data finds claimable | 0 missed in the sampled week |
-| SM3 | Manual effort per week to produce fileable claim data | Release 1: one command, eyeball output. Release 2: one `--file` command, audit log only |
-| SM4 | Claims filed without manual copy-paste into SWR | 100% of emitted rows auto-submitted when `--file` runs and tickets present |
+| SM3 | Manual effort per week to produce fileable claim data | Release 1: one command, eyeball output. Release 2+: `--file` / `--weekly-ops`; attended captcha only |
+| SM4 | Claims filed without manual copy-paste into SWR | 100% of emitted rows auto-submitted when `--file` / weekly ops runs and tickets present |
+| SM5 | Prior claims stay visible until paid | Table 2 lists open claims; omits once `paid` was reported (FR37) |
 
 **Counter-metrics (guard against gaming SM1/SM2)**
 
@@ -274,7 +283,7 @@ provisioning or Terraform. The seams/technical-how detail lives in
 - FR1–FR21 as listed above. Cancellation fallback (FR12) enabled by default
   (OQ1 resolved 2026-07-15).
 
-**Release 2 — Hands-off filing (in scope, approved 2026-07-16)**
+**Release 2 — Hands-off filing (shipped)**
 
 - Weekly email digest (FR22).
 - Ticket artifact gate — naming contract + prerequisite check (FR23–FR25).
@@ -282,61 +291,77 @@ provisioning or Terraform. The seams/technical-how detail lives in
   command (FR26–FR31).
 - Epics 4–6; see `../../epics.md`.
 
-**Deferred past Release 2**
+**Release 3 — Local weekly ops loop (shipped; Table 1 complete, Table 2 next)**
 
-1. ~~Photo → OCR → auto-read ticket contents~~ — **delivered locally via Ollama** (Epic 5b / vision gate).
-2. ~~AWS Lambda / cloud API endpoint~~ — **CANCELLED (2026-07-17).** Product runs locally (Windows + Ollama + Task Scheduler); no cloud deploy planned.
-3. Season-ticket band track (FR18 data model ready; logic deferred).
-4. ~~Ticket ingest adapter (auto-discover tickets without manual naming)~~ — largely covered by Ollama classify + folder workflow.
+- Friday / catch-up schedule for **prior** Mon–Fri week (FR32–FR33) — Task
+  Scheduler registered and enabled.
+- Chain: ingest → assess → classify → file → ops email (FR34).
+- **Table 1 shipped:** claimable / newly filed / skipped (no ticket) / surplus
+  tickets; **partial-ticket filing is the permanent default** (strict whole-week
+  gate opt-in via `--strict-all-tickets`).
+- Gmail API port (FR40).
+- Inbox stages characterised (FR38): `RECEIVED` → `Approved` → `PAYMENT SENT`.
+- **Still open for this release arc:** FR37–FR38 **Table 2** + durable claim
+  lifecycle store (Epic 7 stories 7.4 / 7.5) — **this is the next stage**.
 
-**Release 3 — Local weekly ops loop (approved 2026-07-17; Epic 6 unblocked 2026-07-17)**
+**Release 4 — Phone → unclassified intake (shipped)**
 
-- Friday / catch-up schedule for **prior** Mon–Fri week (FR32–FR33).
-- Chain: assess → classify → file (Epic 6) → Gmail ops email (FR34–FR36).
-- Claim lifecycle via Gmail inbox: received → approved → paid, with Table 2 follow-up (FR37–FR38; characterised 2026-07-20).
-- Gmail API port from financeTracker_SW (FR40).
-- **Scope = Epic 7** (closed 2026-07-20). Rich Tables 1–2 / lifecycle store deferred; digest + FR38 characterisation accepted. See `../../implementation-artifacts/epic-7-closeout-2026-07-20.md`.
-- Deferred past R3 (unchanged): season-ticket band track (FR18); cloud deploy remains cancelled.
+- Gmail subject `TICKET…` photos/PDFs → `tickets/unclassified/` (FR41–FR45).
+- Cadence: daily ingest + ingest immediately before Friday `--weekly-ops`.
+- Optional folder drain (`--ingest-ticket-folder`) available.
+- Scope = Epic 8 (implementation complete; sprint status may still say review).
 
-**Release 4 — Phone → unclassified intake (approved 2026-07-20)**
+**Release 5 — Digital fare via SWR Booking Confirmation (shipped v2.1.0 / v2.1.1)**
 
-- Photograph ticket on phone → `tickets/unclassified/` without USB copy (FR41–FR45).
-- **Recommended MVP:** Gmail attachment drop reusing Epic 7 Gmail API.
-- **Cadence (locked 2026-07-20):** ingest **once daily** + **again immediately before** Friday `--weekly-ops` (not a frequent poller).
-- Optional: Syncthing/OneDrive + folder watcher.
-- **Scope = Epic 8.** See `../../epics.md` Epic 8. After Epic 8, project ops loop is complete for local use.
-## 9. Open Questions & Assumptions
+- Ingest `SWR Booking Confirmation` emails (Updates category, not Primary-only).
+- Parse PDF text layer for ticket number, price, Out/Ret legs; classify into
+  ready artifacts; enrich matching wallet sidecars by ticket number.
+- Live file booking PDFs as **E-ticket/M-ticket** on the SWR form.
+- Files the confirmation mail like other ticket drops (label + archive).
+
+**Next stage — Release 6 / Epic 7.4–7.5 (not started)**
+
+1. **Claim lifecycle store** — durable local state: submitted → received →
+   approved → paid / failed; keyed by SWR claim id (seed from live filings).
+2. **Ops email Table 2** — Gmail lookup for open claims; statuses
+   received / approved / paid / failed / in flight; omit after `paid` reported
+   (FR37–FR39).
+3. Wire into `--weekly-ops` after file: refresh lifecycle → one email (Table 1 +
+   Table 2).
+
+**Deferred after Table 2**
+
+1. Paper-ticket image preprocessor (deskew / rotate / crop orange fare strip /
+   higher vision edge) before Ollama — improves APTIS paper OCR when no booking
+   PDF exists.
+2. Season-ticket band track (FR18 data model ready; logic deferred).
+3. Cloud deploy remains **cancelled** (local Windows + Ollama + Task Scheduler).
+
+**Still deferred / cancelled (unchanged)**
+
+1. ~~Photo → OCR → auto-read ticket contents~~ — delivered via Ollama (Epic 5b).
+2. ~~AWS Lambda / cloud API~~ — cancelled 2026-07-17.
+3. ~~Ticket ingest without naming~~ — covered by classify + Gmail drop + booking PDF.## 9. Open Questions & Assumptions
 
 - **OQ1 — RESOLVED (2026-07-15).** HSP exposes no cancellation flag — a cancelled
   service is signalled by empty `actual_ta`/`actual_td` at every calling point
-  plus a `late_canc_reason` code. Real cancelled-service fixtures are now captured
-  (`tests/fixtures/recorded_details_cancelled_*.json`, e.g. the 2026-07-10 18:30
-  Waterloo→Portsmouth Harbour, `late_canc_reason` "911"). `map_service_details`
-  maps this shape to `Service.cancelled=True`, and the AD-6 fallback is validated
-  against it by `tests/test_cancellation_recorded.py`. FR12 is therefore
-  **enabled by default** in `RunConfig`; the CLI `--no-cancellations` flag opts
-  out. Actual-late trains still take precedence over cancellation-derived claims.
-- **OQ2 (owner: Simon; revisit: next real filing).** Three linked open points on
-  the payout model, none blocking MVP structure but all affecting the numbers:
-  (a) the open-day-return band track (12.5 / 25 / 50 / 100%) is derived from
-  published SWR policy, not yet verified against a real claim; (b) what each band
-  is a percentage *of* — the single-journey fare or the return fare; (c) whether
-  SWR pays **two** separate claims (outbound + inbound) on one open day return,
-  or caps at the ticket value. The optimiser sums two claims (FR9), so if (c) is
-  capped the objective must cap too. SM1 (Simon verifies every row against the
-  SWR site before filing) catches any over-claim in the meantime. _[ASSUMPTION]_
+  plus a `late_canc_reason` code. Real cancelled-service fixtures are captured;
+  FR12 is **enabled by default**.
+- **OQ2 — RESOLVED (2026-07-17).** Open day return: 15–29 band = **12.5% of
+  return fare**; SWR allows **two claims per day** (outbound + inbound). See
+  `../../implementation-artifacts/epic-6-closeout-2026-07-17.md`.
 - **OQ3 — VALIDATED (2026-07-15); mapping in Release 2 (FR27).** CSV→form
-  field mapping confirmed against published SWR Delay Repay form. Release 2
-  maps at submit time: CRS→station name, HSP reason→SWR category; raw code kept
-  in audit log. Full mapping table in [`addendum.md`](./addendum.md).
-- **OQ4 (owner: Simon; revisit: first `--file` live run).** SWR session handling
-  — whether login persists across batch submissions, and whether 2FA blocks
-  unattended filing.
+  field mapping confirmed. Full mapping table in [`addendum.md`](./addendum.md).
+- **OQ4 — RESOLVED (2026-07-17).** reCAPTCHA blocks unattended Submit. Policy:
+  headed Playwright fill-to-Review; human solves captcha and clicks Submit
+  (OQ4 close-out in Epic 6).
 - **[ASSUMPTION]** MVP surfaces the SWR **band**, not a £ payout, and this is
-  sufficient for now (confirmed with Simon).
-- **[ASSUMPTION]** Claims are filed within SWR's **28-day** window; the tool is
-  run often enough (e.g. weekly) that this is not a system constraint.
-
+  sufficient for optimiser output (fare for the form comes from ticket OCR /
+  booking PDF / config).
+- **[ASSUMPTION]** Claims are filed within SWR's **28-day** window; weekly ops
+  keeps this satisfied.
+- **Open (non-blocking):** equal-band tie-break within a band (earliest vs
+  most-delayed) — revisit only if real weeks show ambiguity.
 ## 10. References
 
 - Source brief: `../../briefs/brief-Late-Train-Query-Engine-2026-07-14/brief.md`
