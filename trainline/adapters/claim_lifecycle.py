@@ -65,21 +65,11 @@ class LifecycleStore:
         when: datetime | None = None,
         amount_gbp: float | None = None,
     ) -> ClaimLifecycleRecord:
+        claim_id = _require_claim_id(claim_id)
         existing = self._rows.get(claim_id)
-        # Do not regress an advanced / failed claim back to submitted.
+        # Do not regress or rewrite an advanced / failed claim.
         if existing is not None and existing.status != "submitted":
-            updated = ClaimLifecycleRecord(
-                claim_id=claim_id,
-                status=existing.status,
-                date=date or existing.date,
-                direction=direction or existing.direction,
-                updated_at=_iso(when),
-                amount_gbp=amount_gbp if amount_gbp is not None else existing.amount_gbp,
-                reported_paid_at=existing.reported_paid_at,
-            )
-            self._rows[claim_id] = updated
-            self._save()
-            return updated
+            return existing
 
         row = ClaimLifecycleRecord(
             claim_id=claim_id,
@@ -102,6 +92,7 @@ class LifecycleStore:
         stage: str,
         when: datetime | None = None,
     ) -> ClaimLifecycleRecord | None:
+        claim_id = claim_id.strip()
         stage_key = stage.strip().casefold().replace(" ", "_")
         # Accept ClaimMailStage-style "payment_sent" → paid
         if stage_key == "payment_sent":
@@ -114,7 +105,10 @@ class LifecycleStore:
             return None
         if existing.status == "failed":
             return existing
+        # ``failed`` only from ``submitted`` (filing failure) — never regress paid/etc.
         if stage_key == "failed":
+            if existing.status != "submitted":
+                return existing
             updated = ClaimLifecycleRecord(
                 claim_id=existing.claim_id,
                 status="failed",
@@ -166,6 +160,9 @@ class LifecycleStore:
             row = self._rows.get(claim_id)
             if row is None:
                 continue
+            # AD-20 / FR39: only paid rows leave Table 2 via reported_paid_at.
+            if row.status != "paid":
+                continue
             if row.reported_paid_at is not None:
                 continue
             self._rows[claim_id] = ClaimLifecycleRecord(
@@ -187,6 +184,32 @@ class LifecycleStore:
         self.path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
+def _require_claim_id(claim_id: str) -> str:
+    cleaned = claim_id.strip()
+    if not cleaned:
+        raise ValueError("claim_id must be non-empty")
+    return cleaned
+
+
+def _coerce_amount(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"invalid amount_gbp: {value!r}")
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str) and value.strip():
+        return float(value)
+    raise ValueError(f"invalid amount_gbp: {value!r}")
+
+
+def _normalize_reported(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def _record_from_dict(claim_id: str, payload: object) -> ClaimLifecycleRecord:
     if not isinstance(payload, dict):
         raise ValueError(f"invalid lifecycle row for {claim_id}")
@@ -199,6 +222,6 @@ def _record_from_dict(claim_id: str, payload: object) -> ClaimLifecycleRecord:
         date=str(payload.get("date", "")),
         direction=str(payload.get("direction", "")),
         updated_at=str(payload.get("updated_at", "")),
-        amount_gbp=payload.get("amount_gbp"),
-        reported_paid_at=payload.get("reported_paid_at"),
+        amount_gbp=_coerce_amount(payload.get("amount_gbp")),
+        reported_paid_at=_normalize_reported(payload.get("reported_paid_at")),
     )

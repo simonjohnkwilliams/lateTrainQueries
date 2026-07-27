@@ -101,7 +101,7 @@ development_status:
 
   # Release 6 — Table 2 + claim lifecycle (supersedes deferred 7-4 / 7-5)
   epic-9: in-progress
-  9-1-claim-lifecycle-store: review
+  9-1-claim-lifecycle-store: done
   9-2-record-submitted-on-live-file: backlog
   9-3-gmail-lifecycle-refresh: backlog
   9-4-table2-ops-email-weekly-chain: backlog

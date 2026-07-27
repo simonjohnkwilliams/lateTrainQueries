@@ -100,6 +100,54 @@ def test_failed_is_terminal(tmp_path: Path):
 
 
 @pytest.mark.offline
+def test_failed_does_not_regress_paid(tmp_path: Path):
+    store = _store(tmp_path)
+    store.record_submitted(
+        claim_id="SWR-0005-000-005",
+        date="2026-07-01",
+        direction="outbound",
+        when=datetime(2026, 7, 2, tzinfo=UTC),
+    )
+    store.apply_stage(
+        "SWR-0005-000-005", "paid", datetime(2026, 7, 5, tzinfo=UTC)
+    )
+    store.apply_stage(
+        "SWR-0005-000-005", "failed", datetime(2026, 7, 6, tzinfo=UTC)
+    )
+    assert store.get("SWR-0005-000-005").status == "paid"
+
+
+@pytest.mark.offline
+def test_mark_reported_paid_ignores_non_paid(tmp_path: Path):
+    store = _store(tmp_path)
+    store.record_submitted(
+        claim_id="SWR-0006-000-006",
+        date="2026-07-01",
+        direction="outbound",
+        when=datetime(2026, 7, 2, tzinfo=UTC),
+    )
+    store.mark_reported_paid(
+        ["SWR-0006-000-006"], datetime(2026, 7, 11, tzinfo=UTC)
+    )
+    row = store.get("SWR-0006-000-006")
+    assert row is not None
+    assert row.reported_paid_at is None
+    assert "SWR-0006-000-006" in {r.claim_id for r in store.open_for_table2()}
+
+
+@pytest.mark.offline
+def test_record_submitted_rejects_empty_claim_id(tmp_path: Path):
+    store = _store(tmp_path)
+    with pytest.raises(ValueError, match="claim_id"):
+        store.record_submitted(
+            claim_id="  ",
+            date="2026-07-01",
+            direction="outbound",
+            when=datetime(2026, 7, 2, tzinfo=UTC),
+        )
+
+
+@pytest.mark.offline
 def test_open_for_table2_omits_reported_paid(tmp_path: Path):
     store = _store(tmp_path)
     store.record_submitted(

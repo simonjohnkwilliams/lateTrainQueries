@@ -1,7 +1,7 @@
 ---
 story_key: 9-1-claim-lifecycle-store
 epic: 9
-status: review
+status: done
 created: 2026-07-27
 baseline_commit: 0410d8394dd6fa3dbc94e77c9f8b54a7528c5da5
 depends_on: []
@@ -11,7 +11,7 @@ supersedes: [7-5]
 
 # Story 9.1: Claim lifecycle store
 
-Status: review
+Status: done
 
 <!-- Ultimate context engine analysis completed - comprehensive developer guide created -->
 
@@ -49,6 +49,16 @@ So that later stories can record filings, refresh from Gmail, and build idempote
   - [x] `DEFAULT_LIFECYCLE_PATH`
 - [x] Confirm `python -m pytest -q --tb=line tests/test_claim_lifecycle.py` green; full offline suite no regressions
 - [x] Do **not** wire CLI, Gmail refresh, or ops email Table 2 (Stories 9.2–9.4)
+
+### Review Findings
+
+- [x] [Review][Patch] `failed` must not regress `paid`/`approved`/`received` — only from `submitted` [`claim_lifecycle.py`]
+- [x] [Review][Patch] `mark_reported_paid` only stamps `status == paid` [`claim_lifecycle.py`]
+- [x] [Review][Patch] `record_submitted` on advanced/failed is no-op (no metadata rewrite) [`claim_lifecycle.py`]
+- [x] [Review][Patch] Reject empty `claim_id`; normalize empty `reported_paid_at`; coerce `amount_gbp` on load [`claim_lifecycle.py`]
+- [x] [Review][Defer] Non-atomic JSON rewrite / concurrent writers — deferred (matches DropHashStore idiom; solo local use)
+- [x] [Review][Defer] One corrupt row bricks whole load — deferred (same as other Results JSON loaders)
+- [x] [Review][Defer] Sticky `failed` rows in Table 2 until product exit path — deferred to 9.4 / later
 
 ## Dev Notes
 
@@ -172,3 +182,4 @@ Composer (Cursor agent)
 
 - 2026-07-27 — Story context created (ready-for-dev); supersedes deferred 7.5
 - 2026-07-27 — Implemented lifecycle store; status → review
+- 2026-07-27 — Code review: patched failed/paid regressions + mark_reported_paid guard; status → done
