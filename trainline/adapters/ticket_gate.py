@@ -114,7 +114,7 @@ def scan_ticket_dir(path) -> ScanResult:
 
     Valid names match ``EXPECTED_FORMAT``. Misnamed files are listed with a
     reason that includes the expected format. Missing directory → empty scan
-    with ``missing_directory=True``.
+    with ``missing_directory=True``. Sidecar ``*.meta.json`` files are ignored.
     """
     root = Path(path)
     if not root.is_dir():
@@ -124,6 +124,9 @@ def scan_ticket_dir(path) -> ScanResult:
     invalid: list[tuple[Path, str]] = []
     for entry in sorted(root.iterdir()):
         if not entry.is_file():
+            continue
+        # OCR / booking fare sidecars live beside tickets — not ticket artifacts.
+        if entry.name.casefold().endswith(".meta.json"):
             continue
         parsed = parse_ticket_filename(entry.name)
         if parsed is None:

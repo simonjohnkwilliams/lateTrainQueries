@@ -899,10 +899,10 @@ def classify_unclassified(
     for index, path in enumerate(files, start=1):
         if on_progress is not None:
             on_progress(index, total, path, "start", None)
-        item = _classify_one(path, layout, ocr, when, min_confidence)
-        summary.items.append(item)
+        items = _classify_one(path, layout, ocr, when, min_confidence)
+        summary.items.extend(items)
         if on_progress is not None:
-            on_progress(index, total, path, "done", item)
+            on_progress(index, total, path, "done", items[-1] if items else None)
     return summary
 
 
@@ -917,13 +917,89 @@ def _append_unreadable_report(layout: TicketsLayout, item: ClassifyItem) -> None
         fh.write(line)
 
 
+def _classify_booking_pdf(
+    path: Path,
+    layout: TicketsLayout,
+    conf,
+    when: datetime,
+) -> list[ClassifyItem]:
+    """Materialise Out/Ret ready PDFs from one SWR booking confirmation."""
+    from trainline.booking_pdf import (
+        booking_leg_transcript,
+        journey_datetime,
+        portion_suffix,
+    )
+
+    items: list[ClassifyItem] = []
+    data = path.read_bytes()
+    for i, leg in enumerate(conf.legs):
+        journey = journey_datetime(leg)
+        ticket_id = f"{conf.ticket_number}-{portion_suffix(leg.portion)}"
+        dest_name = ready_filename(journey, ticket_id, path.suffix)
+        dest = layout.ready_to_claim / dest_name
+        if dest.exists():
+            dest = layout.ready_to_claim / ready_filename(
+                journey, f"{ticket_id}-{_file_hash(path)[:4]}", path.suffix
+            )
+        dest.write_bytes(data)
+        transcript = booking_leg_transcript(conf, leg)
+        _write_ready_ticket_meta(dest, transcript)
+        items.append(
+            ClassifyItem(
+                path,
+                dest,
+                "ready",
+                f"{dest_name}; booking {conf.booking_reference}; "
+                f"{leg.portion} price={conf.price}",
+            )
+        )
+    # Enrich any matching wallet screenshots already in ready_to_claim.
+    enrich_ready_metas_from_booking(layout.ready_to_claim, conf)
+    path.unlink(missing_ok=True)
+    del when  # stamp unused; booking dates come from PDF text
+    return items
+
+
+def enrich_ready_metas_from_booking(ready_dir: Path, conf) -> int:
+    """Fill missing ``ticket_price`` on ready sidecars matching ticket number."""
+    ready_dir = Path(ready_dir)
+    if not ready_dir.is_dir():
+        return 0
+    want = conf.ticket_number.casefold()
+    updated = 0
+    for meta_path in ready_dir.glob("*.meta.json"):
+        try:
+            data = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        ref = str(data.get("ticket_reference") or "").strip()
+        if ref.casefold() != want:
+            continue
+        if str(data.get("ticket_price") or "").strip():
+            continue
+        data["ticket_price"] = conf.price
+        meta_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        updated += 1
+    return updated
+
+
 def _classify_one(
     path: Path,
     layout: TicketsLayout,
     ocr: OcrEngine,
     when: datetime,
     min_confidence: float,
-) -> ClassifyItem:
+) -> list[ClassifyItem]:
+    if path.suffix.casefold() == ".pdf":
+        from trainline.booking_pdf import parse_swr_booking_pdf
+
+        booking = parse_swr_booking_pdf(path)
+        if booking is not None and booking.legs:
+            return _classify_booking_pdf(path, layout, booking, when)
+
     result = ocr.extract(path)
     readable = is_readable(result, min_confidence)
     # Soft-accept: clear Godalming↔London keywords despite low OCR confidence
@@ -936,7 +1012,7 @@ def _classify_one(
         shutil.move(str(path), str(dest))
         item = ClassifyItem(path, dest, "rejected_unreadable", detail)
         _append_unreadable_report(layout, item)
-        return item
+        return [item]
 
     # Content rules: readable text we may still reject (wrong doc / wrong route)
     content = assess_ticket_content(result.text)
@@ -944,22 +1020,26 @@ def _classify_one(
         dest_name = reject_filename("Not_valid_Document", path, when)
         dest = layout.rejected / dest_name
         shutil.move(str(path), str(dest))
-        return ClassifyItem(
-            path,
-            dest,
-            "rejected_document",
-            "; ".join(content.reasons),
-        )
+        return [
+            ClassifyItem(
+                path,
+                dest,
+                "rejected_document",
+                "; ".join(content.reasons),
+            )
+        ]
     if content.verdict == "wrong_route":
         dest_name = reject_filename("Not_valid_Route", path, when)
         dest = layout.rejected / dest_name
         shutil.move(str(path), str(dest))
-        return ClassifyItem(
-            path,
-            dest,
-            "rejected_route",
-            "; ".join(content.reasons),
-        )
+        return [
+            ClassifyItem(
+                path,
+                dest,
+                "rejected_route",
+                "; ".join(content.reasons),
+            )
+        ]
     if content.verdict == "route_unclear":
         detail = diagnose_route_unreadable(path, result, min_confidence)
         dest_name = reject_filename("unreadable", path, when)
@@ -967,7 +1047,7 @@ def _classify_one(
         shutil.move(str(path), str(dest))
         item = ClassifyItem(path, dest, "rejected_unreadable", detail)
         _append_unreadable_report(layout, item)
-        return item
+        return [item]
 
     journey = resolve_journey_date(result.text, path.name)
     if journey is None:
@@ -995,7 +1075,7 @@ def _classify_one(
         shutil.move(str(path), str(dest))
         item = ClassifyItem(path, dest, "rejected_no_date", detail)
         _append_unreadable_report(layout, item)
-        return item
+        return [item]
 
     ticket_id = ticket_id_from_text_or_hash(result.text, path)
     # Prefer a clear 5+ digit ticket number from OCR for the ready filename.
@@ -1010,4 +1090,4 @@ def _classify_one(
             journey, f"{ticket_id}-{_file_hash(path)[:4]}", path.suffix)
     shutil.move(str(path), str(dest))
     _write_ready_ticket_meta(dest, result.text)
-    return ClassifyItem(path, dest, "ready", dest_name)
+    return [ClassifyItem(path, dest, "ready", dest_name)]

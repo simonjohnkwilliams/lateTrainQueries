@@ -46,6 +46,19 @@ def build_ticket_mail_query(
     return " ".join(parts)
 
 
+def build_booking_confirmation_mail_query() -> str:
+    """SWR booking PDFs land in Updates, not Primary — do not filter category.
+
+    Subject shape observed live: ``SWR Booking Confirmation - B-SWR-…``.
+    """
+    return 'in:inbox has:attachment filename:pdf subject:"SWR Booking Confirmation"'
+
+
+def subject_matches_booking_confirmation(subject: str) -> bool:
+    """True for SWR booking-confirmation subjects (case-insensitive)."""
+    return "swr booking confirmation" in (subject or "").casefold()
+
+
 def message_subject(message: dict[str, Any]) -> str:
     headers = (message.get("payload") or {}).get("headers") or []
     for h in headers:

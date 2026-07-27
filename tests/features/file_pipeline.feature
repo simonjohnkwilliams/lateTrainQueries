@@ -26,7 +26,7 @@ Feature: Single-command assess → gate → file pipeline
     And credentials are discoverable at the default project path
     And ready_to_claim is empty
     And a recording fake browser is installed
-    When I run the MVP command with args --file --from-date 2026-07-10 --to-date 2026-07-10
+    When I run the MVP command with args --file --strict-all-tickets --from-date 2026-07-10 --to-date 2026-07-10
     Then the command exits with a non-zero status
     And claim files are written under "Results"
     And no filing audit was written

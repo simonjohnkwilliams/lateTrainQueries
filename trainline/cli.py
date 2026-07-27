@@ -1137,12 +1137,15 @@ def _ingest_from_gmail_client(
 
     Label/modify is best-effort: missing ``gmail.modify`` must not block
     downloads (hash store still dedups). Re-auth restores label idempotency.
+    Also ingests ``SWR Booking Confirmation`` PDFs (Updates category).
     """
     from trainline.adapters.gmail.errors import GmailError
     from trainline.adapters.gmail.ticket_mail import (
+        build_booking_confirmation_mail_query,
         build_ticket_mail_query,
         extract_image_attachments,
         message_subject,
+        subject_matches_booking_confirmation,
         subject_matches_ticket_prefix,
     )
     from trainline.adapters.ticket_drop import DropHashStore, unique_drop_path
@@ -1151,16 +1154,6 @@ def _ingest_from_gmail_client(
     dest_dir.mkdir(parents=True, exist_ok=True)
     roots = [Path(p) for p in (presence_roots or [dest_dir])]
     store = DropHashStore(hash_store_path)
-    query = build_ticket_mail_query(
-        subject_prefix=subject_prefix,
-        label=label,
-        ingested_label=ingested_label,
-    )
-    _progress(f"Ticket mail query: {query}")
-    hits = client.search_messages(query, max_results=100)
-    if not hits:
-        _progress("No matching ticket emails.")
-        return 0
 
     ingested_id: str | None = None
     try:
@@ -1174,7 +1167,7 @@ def _ingest_from_gmail_client(
         )
 
     def _file_message(mid: str) -> None:
-        """Mark ingested + archive out of Primary inbox (remove INBOX/UNREAD)."""
+        """Mark ingested + archive out of inbox (remove INBOX/UNREAD)."""
         if ingested_id is None:
             _progress(
                 f"WARNING: cannot file message {mid} (no label id / scopes). "
@@ -1195,47 +1188,83 @@ def _ingest_from_gmail_client(
                 f"({mid}). Re-run: python -m trainline --gmail-auth"
             )
 
-    saved = duplicates = skipped = 0
-    for hit in hits:
-        mid = hit.get("id")
-        if not mid:
-            continue
-        msg = client.get_message(mid)
-        subject = message_subject(msg)
-        if label is None and not subject_matches_ticket_prefix(
-            subject, prefix=subject_prefix
-        ):
-            skipped += 1
-            _progress(
-                f"Skipping non-prefix subject ({mid}): {subject!r}"
-            )
-            continue
-        refs = extract_image_attachments(msg)
-        if not refs:
-            skipped += 1
-            _file_message(mid)
-            continue
-        for ref in refs:
-            data = client.get_attachment(mid, ref.attachment_id)
-            if not data:
+    def _save_hits(
+        hits: list,
+        *,
+        accept_subject,
+        query_label: str,
+    ) -> tuple[int, int, int]:
+        saved = duplicates = skipped = 0
+        _progress(f"{query_label}: {len(hits)} message(s)")
+        for hit in hits:
+            mid = hit.get("id")
+            if not mid:
+                continue
+            msg = client.get_message(mid)
+            subject = message_subject(msg)
+            if not accept_subject(subject):
                 skipped += 1
+                _progress(
+                    f"Skipping non-matching subject ({mid}): {subject!r}"
+                )
                 continue
-            path = unique_drop_path(
-                dest_dir,
-                data,
-                ref.filename,
-                store=store,
-                presence_roots=roots,
-            )
-            if path is None:
-                duplicates += 1
+            refs = extract_image_attachments(msg)
+            if not refs:
+                skipped += 1
+                _file_message(mid)
                 continue
-            path.write_bytes(data)
-            saved += 1
-            _progress(f"Saved ticket photo -> {path}")
-        # Always file after handling a prefix-matching Primary message so the
-        # inbox no longer needs action (even if all attachments were duplicates).
-        _file_message(mid)
+            for ref in refs:
+                data = client.get_attachment(mid, ref.attachment_id)
+                if not data:
+                    skipped += 1
+                    continue
+                path = unique_drop_path(
+                    dest_dir,
+                    data,
+                    ref.filename,
+                    store=store,
+                    presence_roots=roots,
+                )
+                if path is None:
+                    duplicates += 1
+                    continue
+                path.write_bytes(data)
+                saved += 1
+                _progress(f"Saved ticket attachment -> {path}")
+            _file_message(mid)
+        return saved, duplicates, skipped
+
+    ticket_query = build_ticket_mail_query(
+        subject_prefix=subject_prefix,
+        label=label,
+        ingested_label=ingested_label,
+    )
+    _progress(f"Ticket mail query: {ticket_query}")
+    ticket_hits = client.search_messages(ticket_query, max_results=100)
+
+    def _accept_ticket(subject: str) -> bool:
+        if label is not None:
+            return True
+        return subject_matches_ticket_prefix(subject, prefix=subject_prefix)
+
+    saved, duplicates, skipped = _save_hits(
+        ticket_hits,
+        accept_subject=_accept_ticket,
+        query_label="Primary TICKET mail",
+    )
+
+    booking_query = build_booking_confirmation_mail_query()
+    _progress(f"Booking confirmation query: {booking_query}")
+    booking_hits = client.search_messages(booking_query, max_results=50)
+    b_saved, b_dupes, b_skipped = _save_hits(
+        booking_hits,
+        accept_subject=subject_matches_booking_confirmation,
+        query_label="SWR booking confirmation",
+    )
+    saved += b_saved
+    duplicates += b_dupes
+    skipped += b_skipped
+
     _progress(
         f"Ticket mail ingest: saved={saved} duplicates={duplicates} skipped={skipped}"
     )

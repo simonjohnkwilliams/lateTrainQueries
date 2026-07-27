@@ -21,7 +21,7 @@ def _set_all(monkeypatch, **overrides):
         "DIGEST_TO": "simon@example.test",
     }
     base.update(overrides)
-    for key in REQUIRED + ("DIGEST_FROM",):
+    for key in REQUIRED + ("DIGEST_FROM", "HSP_CREDENTIALS_FILE"):
         monkeypatch.delenv(key, raising=False)
     for key, value in base.items():
         if value is not None:
@@ -51,7 +51,7 @@ def test_digest_from_optional(monkeypatch):
 
 @pytest.mark.offline
 def test_missing_all_keys_names_every_required_key(monkeypatch):
-    for key in REQUIRED + ("DIGEST_FROM",):
+    for key in REQUIRED + ("DIGEST_FROM", "HSP_CREDENTIALS_FILE"):
         monkeypatch.delenv(key, raising=False)
     with pytest.raises(EmailConfigError) as excinfo:
         load_email_config()

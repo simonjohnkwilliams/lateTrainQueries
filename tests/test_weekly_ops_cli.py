@@ -8,6 +8,19 @@ import pytest
 from trainline import cli
 from trainline.adapters.schedule_window import prior_working_week
 
+_WEEKLY_ENV = (
+    "TRAINLINE_SKIP_TICKET_INGEST",
+    "TRAINLINE_OPS_EMAIL_FILE",
+    "TRAINLINE_AS_OF",
+    "TRAINLINE_TICKETS_ROOT",
+)
+
+
+@pytest.fixture(autouse=True)
+def _clear_weekly_env(monkeypatch):
+    for key in _WEEKLY_ENV:
+        monkeypatch.delenv(key, raising=False)
+
 
 @pytest.mark.offline
 def test_weekly_ops_call_order_ingest_assess_classify_file_email(monkeypatch, tmp_path):

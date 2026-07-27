@@ -251,41 +251,61 @@ def test_classify_ambiguous_route_is_unreadable(tmp_path):
 
 
 @pytest.mark.offline
-def test_classify_ready_reject_unreadable_route(tmp_path):
+def test_classify_swr_booking_pdf_emits_out_and_ret_with_price(tmp_path):
+    from trainline.adapters.ticket_intake import FakeOcrEngine, classify_unclassified
+
+    fixture = (
+        Path(__file__).resolve().parent
+        / "fixtures"
+        / "tickets"
+        / "booking"
+        / "B-SWR-TDV0MXMTS.pdf"
+    )
+    if not fixture.is_file():
+        pytest.skip("booking PDF fixture not present")
+
     layout = tickets_layout(tmp_path / "tickets")
     layout.ensure()
-    (layout.unclassified / "good.jpg").write_bytes(b"GOOD")
-    (layout.unclassified / "badroute.jpg").write_bytes(b"BAD")
-    (layout.unclassified / "blank.jpg").write_bytes(b"BLANK")
+    dest = layout.unclassified / "B-SWR-TDV0MXMTS.pdf"
+    dest.write_bytes(fixture.read_bytes())
 
-    ocr = FakeOcrEngine({
-        "good.jpg": OcrResult(
-            "Godalming London Waterloo 16/07/2024 "
-            "Price 28.90 Ticket number 54321",
-            80.0,
-        ),
-        "badroute.jpg": OcrResult(
-            "Guildford Burgess Hill 16/07/2024", 80.0),
-        "blank.jpg": OcrResult("", 0.0),
-    })
-    when = datetime(2026, 7, 16, 10, 0, 0)
-    summary = classify_unclassified(layout, ocr, now=when)
-    assert summary.ready == 1
-    assert summary.rejected == 2
-    assert list(layout.unclassified.iterdir()) == []
-    ready = [p for p in layout.ready_to_claim.iterdir() if p.suffix.casefold() != ".json"]
-    assert len(ready) == 1
-    assert ready[0].name.startswith("07-16-")
-    meta = ready[0].with_name(ready[0].stem + ".meta.json")
-    assert meta.is_file()
+    # Also plant a wallet screenshot meta missing price — should be enriched.
+    wallet = layout.ready_to_claim / "07-24-SRBYE8PNEF3.jpg"
+    wallet.write_bytes(b"fake-jpg")
+    wallet.with_name(wallet.stem + ".meta.json").write_text(
+        '{\n  "ticket_reference": "SRBYE8PNEF3"\n}\n',
+        encoding="utf-8",
+    )
+
+    summary = classify_unclassified(
+        layout, FakeOcrEngine({}), now=datetime(2026, 7, 27, 12, 0, 0)
+    )
+    assert summary.ready == 2
+    pdfs = sorted(
+        p.name
+        for p in layout.ready_to_claim.iterdir()
+        if p.suffix.casefold() == ".pdf"
+    )
+    assert pdfs == [
+        "07-24-SRBYE8PNEF3-OUT.pdf",
+        "07-24-SRBYE8PNEF3-RET.pdf",
+    ]
     import json
-    data = json.loads(meta.read_text(encoding="utf-8"))
-    assert data["ticket_price"] == "28.90"
-    assert data["ticket_reference"] == "54321"
-    rejected = {p.name for p in layout.rejected.iterdir() if p.is_file()}
-    assert any(n.startswith("Not_valid_Route-") for n in rejected)
-    assert any(n.startswith("unreadable-") for n in rejected)
-    assert (layout.rejected / "unreadable_report.txt").exists()
+
+    for name in pdfs:
+        meta = json.loads(
+            (layout.ready_to_claim / f"{Path(name).stem}.meta.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert meta["ticket_price"] == "38.80"
+        assert meta["ticket_reference"] == "SRBYE8PNEF3"
+
+    wallet_meta = json.loads(
+        wallet.with_name(wallet.stem + ".meta.json").read_text(encoding="utf-8")
+    )
+    assert wallet_meta["ticket_price"] == "38.80"
+    assert not dest.exists()
 
 
 @pytest.mark.offline

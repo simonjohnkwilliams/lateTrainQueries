@@ -25,7 +25,7 @@ PKG_ROOT = os.path.abspath(
 
 @pytest.fixture
 def world(monkeypatch):
-    for key in REQUIRED + ("DIGEST_FROM",):
+    for key in REQUIRED + ("DIGEST_FROM", "HSP_CREDENTIALS_FILE"):
         monkeypatch.delenv(key, raising=False)
     return {
         "error": None,
@@ -51,7 +51,7 @@ def _full_env():
 
 @given("no email environment variables are set")
 def no_email_env(world, monkeypatch):
-    for key in REQUIRED + ("DIGEST_FROM",):
+    for key in REQUIRED + ("DIGEST_FROM", "HSP_CREDENTIALS_FILE"):
         monkeypatch.delenv(key, raising=False)
 
 

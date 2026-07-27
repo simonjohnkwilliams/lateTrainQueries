@@ -68,6 +68,19 @@ def test_scan_separates_valid_and_invalid(tmp_path):
 
 
 @pytest.mark.offline
+def test_scan_ignores_meta_json_sidecars(tmp_path):
+    ticket_dir = tmp_path / "ticket"
+    ticket_dir.mkdir()
+    (ticket_dir / "07-24-SRBYE8PNEF3-OUT.pdf").write_bytes(b"%PDF")
+    (ticket_dir / "07-24-SRBYE8PNEF3-OUT.meta.json").write_text(
+        '{"ticket_price": "38.80"}\n', encoding="utf-8"
+    )
+    scan = scan_ticket_dir(ticket_dir)
+    assert len(scan.valid) == 1
+    assert scan.invalid == ()
+
+
+@pytest.mark.offline
 def test_scan_missing_dir_returns_empty(tmp_path):
     scan = scan_ticket_dir(tmp_path / "nope")
     assert scan.valid == ()

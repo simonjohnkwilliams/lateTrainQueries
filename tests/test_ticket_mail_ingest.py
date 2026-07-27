@@ -58,13 +58,124 @@ def test_extract_image_attachments_allows_pdf_and_skips_txt():
 
 
 @pytest.mark.offline
-def test_subject_matches_ticket_prefix_only_at_start():
-    from trainline.adapters.gmail.ticket_mail import subject_matches_ticket_prefix
+def test_build_booking_confirmation_mail_query_not_primary_only():
+    from trainline.adapters.gmail.ticket_mail import (
+        build_booking_confirmation_mail_query,
+        subject_matches_booking_confirmation,
+    )
 
-    assert subject_matches_ticket_prefix("TICKET GOD return")
-    assert subject_matches_ticket_prefix("ticket photo")
-    assert not subject_matches_ticket_prefix("Your England tickets")
-    assert not subject_matches_ticket_prefix("Re: Delay Repay ticket")
+    q = build_booking_confirmation_mail_query()
+    assert "SWR Booking Confirmation" in q
+    assert "filename:pdf" in q
+    assert "category:primary" not in q
+    assert subject_matches_booking_confirmation(
+        "SWR Booking Confirmation - B-SWR-TDV0MXMTS"
+    )
+    assert not subject_matches_booking_confirmation("TICKET photo")
+
+
+@pytest.mark.offline
+def test_ingest_booking_confirmation_pdf(tmp_path: Path):
+    dest = tmp_path / "unclassified"
+    dest.mkdir()
+    pdf = b"%PDF-1.4 booking-bytes"
+    client = MagicMock()
+    client.search_messages.side_effect = [
+        [],  # Primary TICKET query
+        [{"id": "book1"}],  # booking confirmation query
+    ]
+    client.get_message.return_value = {
+        "id": "book1",
+        "payload": {
+            "headers": [
+                {
+                    "name": "Subject",
+                    "value": "SWR Booking Confirmation - B-SWR-TDV0MXMTS",
+                }
+            ],
+            "parts": [
+                {
+                    "filename": "B-SWR-TDV0MXMTS.pdf",
+                    "mimeType": "application/pdf",
+                    "body": {"attachmentId": "P1", "size": len(pdf)},
+                }
+            ],
+        },
+    }
+    client.get_attachment.return_value = pdf
+    client.ensure_label_id.return_value = "Label_b"
+
+    from trainline import cli
+
+    rc = cli._ingest_from_gmail_client(
+        client,
+        dest_dir=dest,
+        hash_store_path=tmp_path / "hashes.json",
+    )
+    assert rc == 0
+    files = list(dest.glob("*.pdf"))
+    assert len(files) == 1
+    assert files[0].read_bytes() == pdf
+    assert client.search_messages.call_count == 2
+    # Same filing as Primary TICKET photos: label + archive out of inbox
+    client.modify_message.assert_called_once_with(
+        "book1",
+        add_label_ids=["Label_b"],
+        remove_label_ids=["INBOX", "UNREAD"],
+    )
+
+
+@pytest.mark.offline
+def test_ingest_booking_still_files_when_pdf_already_on_disk(tmp_path: Path):
+    """Duplicate hash must not leave the booking mail sitting in inbox."""
+    dest = tmp_path / "unclassified"
+    dest.mkdir()
+    pdf = b"%PDF-1.4 already-saved"
+    # Pre-seed so unique_drop_path returns None (duplicate).
+    from trainline.adapters.ticket_drop import DropHashStore, unique_drop_path
+
+    store = DropHashStore(tmp_path / "hashes.json")
+    existing = unique_drop_path(dest, pdf, "B-SWR-TDV0MXMTS.pdf", store=store)
+    assert existing is not None
+    existing.write_bytes(pdf)
+
+    client = MagicMock()
+    client.search_messages.side_effect = [[], [{"id": "book2"}]]
+    client.get_message.return_value = {
+        "id": "book2",
+        "payload": {
+            "headers": [
+                {
+                    "name": "Subject",
+                    "value": "SWR Booking Confirmation - B-SWR-XYZ",
+                }
+            ],
+            "parts": [
+                {
+                    "filename": "B-SWR-XYZ.pdf",
+                    "mimeType": "application/pdf",
+                    "body": {"attachmentId": "P2", "size": len(pdf)},
+                }
+            ],
+        },
+    }
+    client.get_attachment.return_value = pdf
+    client.ensure_label_id.return_value = "Label_dup"
+
+    from trainline import cli
+
+    rc = cli._ingest_from_gmail_client(
+        client,
+        dest_dir=dest,
+        hash_store_path=tmp_path / "hashes.json",
+        presence_roots=[dest],
+    )
+    assert rc == 0
+    client.modify_message.assert_called_once_with(
+        "book2",
+        add_label_ids=["Label_dup"],
+        remove_label_ids=["INBOX", "UNREAD"],
+    )
 
 
 @pytest.mark.offline

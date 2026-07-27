@@ -232,3 +232,27 @@ def test_vision_gate_reject_golden(name, vision_engine):
         assert content.verdict != "accept", f"{name}: unexpectedly accepted\n{text!r}"
     else:
         assert not text.strip() or not is_god_wat_route(text)
+
+
+@pytest.mark.offline
+def test_vision_engine_extract_uses_booking_pdf_text_layer(tmp_path):
+    """PDFs skip VL; booking confirmation text layer supplies fare + route."""
+    from trainline.adapters.ollama_vision import OllamaVisionOcrEngine
+    from trainline.adapters.ticket_intake import parse_ticket_price
+
+    fixture = (
+        Path(__file__).resolve().parent
+        / "fixtures"
+        / "tickets"
+        / "booking"
+        / "B-SWR-TDV0MXMTS.pdf"
+    )
+    if not fixture.is_file():
+        pytest.skip("booking PDF fixture not present")
+    path = tmp_path / "booking.pdf"
+    path.write_bytes(fixture.read_bytes())
+    engine = OllamaVisionOcrEngine(model="unused-for-pdf")
+    result = engine.extract(path)
+    assert result.confidence >= 90.0
+    assert is_god_wat_route(result.text)
+    assert parse_ticket_price(result.text) == "38.80"

@@ -363,6 +363,17 @@ class OllamaVisionOcrEngine:
     def extract(self, path: Path) -> _OcrLike:
         path = Path(path)
         if path.suffix.casefold() == ".pdf":
+            from trainline.booking_pdf import (
+                booking_leg_transcript,
+                parse_swr_booking_pdf,
+            )
+
+            booking = parse_swr_booking_pdf(path)
+            if booking is not None and booking.legs:
+                # Classify prefers parse_swr_booking_pdf directly; this path
+                # keeps other callers (diagnostics) useful for booking PDFs.
+                text = booking_leg_transcript(booking, booking.legs[0])
+                return _OcrLike(text=text, confidence=95.0)
             return _OcrLike(text="", confidence=0.0)
         try:
             fields = self.extract_fields(path)

@@ -938,3 +938,10 @@ So that Thursday photos are waiting before Friday weekly ops.
 **Then** ticket ingest runs **once per day** (e.g. morning CatchUp window) **and again immediately before** Friday `--weekly-ops` (compose: ingest → assess → classify → file → email) — no 15‑minute poller (NFR14)
 
 **Cadence (locked 2026-07-20):** once daily + pre-Friday weekly-ops hook. Not continuous polling.
+
+---
+
+## Deferred / next epic (locked 2026-07-27)
+
+- **Paper-ticket image preprocessor** (deskew / rotate / crop orange fare strip / higher vision `max_edge`) before Ollama — improves APTIS paper OCR; not required for digital tickets once SWR Booking Confirmation PDF ingest supplies fare.
+- **Ops email Table 2** claim lifecycle follow-up (FR37–FR38) remains next after booking-confirmation + live sign-off.
