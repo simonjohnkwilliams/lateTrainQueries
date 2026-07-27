@@ -272,6 +272,24 @@ def filter_claims_not_already_claimed(claims, claimed_dir: str | Path):
     return [c for c in claims if claim_date_to_mm_dd(c.date) not in done]
 
 
+def filter_claims_to_ticketed_dates(claims, scan: ScanResult):
+    """Keep claims whose dates have ≥1 ticket; drop the rest (partial file).
+
+    Strict FR25 still applies via ``match_tickets_to_claims`` on the full set.
+    Call this first when ``--allow-partial-tickets`` is set so weekly ops can
+    file matched days without inventing tickets for every delay day.
+    """
+    by_mm_dd = {t.mm_dd for t in scan.valid}
+    kept = []
+    dropped: list[str] = []
+    for claim in claims:
+        if claim_date_to_mm_dd(claim.date) in by_mm_dd:
+            kept.append(claim)
+        else:
+            dropped.append(claim.date)
+    return kept, tuple(sorted(set(dropped)))
+
+
 def move_to_claimed(ticket_path: Path, claimed_dir: str | Path) -> Path:
     """Move a ready ticket into ``claimed/`` after successful Epic 6 submit."""
     import shutil

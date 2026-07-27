@@ -115,6 +115,14 @@ def test_weekly_status_prints_window_and_marker(tmp_path, monkeypatch, capsys):
 
 
 @pytest.mark.offline
+def test_today_respects_trainline_as_of_env(monkeypatch):
+    monkeypatch.setenv("TRAINLINE_AS_OF", "2026-07-31")
+    assert cli._today() == date(2026, 7, 31)
+    monkeypatch.delenv("TRAINLINE_AS_OF")
+    # Without env, seam returns real today (not asserted — clock).
+
+
+@pytest.mark.offline
 def test_weekly_ops_ingest_hard_fail_skips_marker(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "_run_ingest_ticket_mail", lambda **kw: 2)
     monkeypatch.setattr(

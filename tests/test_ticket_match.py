@@ -38,6 +38,26 @@ def _ticket(mm_dd: str, name: str, root: Path) -> TicketFile:
 
 
 @pytest.mark.offline
+def test_filter_claims_to_ticketed_dates_drops_missing(tmp_path):
+    from trainline.adapters.ticket_gate import filter_claims_to_ticketed_dates
+
+    root = tmp_path / "ticket"
+    root.mkdir()
+    scan = ScanResult(
+        valid=(_ticket("07-24", "07-24-A.jpg", root),),
+        invalid=(),
+    )
+    claims = [
+        _claim("2026-07-20"),
+        _claim("2026-07-24"),
+        _claim("2026-07-24", direction=Direction.INBOUND),
+    ]
+    kept, dropped = filter_claims_to_ticketed_dates(claims, scan)
+    assert [c.date for c in kept] == ["2026-07-24", "2026-07-24"]
+    assert dropped == ("2026-07-20",)
+
+
+@pytest.mark.offline
 def test_missing_date_fails(tmp_path):
     root = tmp_path / "ticket"
     root.mkdir()

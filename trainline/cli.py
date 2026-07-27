@@ -38,6 +38,7 @@ from trainline.adapters.notification import digest_subject, render_digest, send_
 from trainline.adapters.swr_mapping import map_claim_for_swr
 from trainline.adapters.ticket_gate import (
     filter_claims_not_already_claimed,
+    filter_claims_to_ticketed_dates,
     format_match_errors,
     gate_blocks_filing,
     load_claim_dates_from_json,
@@ -73,7 +74,10 @@ _file_browser_factory = None
 
 
 def _today() -> date:
-    """Clock seam for tests."""
+    """Clock seam for tests and sign-off (``TRAINLINE_AS_OF=YYYY-MM-DD``)."""
+    raw = (os.environ.get("TRAINLINE_AS_OF") or "").strip()
+    if raw:
+        return date.fromisoformat(raw)
     return date.today()
 
 
@@ -623,6 +627,15 @@ def _parse_args(argv):
         help="With --weekly-ops: ignore existing completion marker and re-run",
     )
     parser.add_argument(
+        "--allow-partial-tickets",
+        dest="allow_partial_tickets",
+        action="store_true",
+        help=(
+            "With --file / --weekly-ops: file claims that have matching tickets "
+            "and skip claim dates with no ticket (strict FR25 still default)"
+        ),
+    )
+    parser.add_argument(
         "--ingest-ticket-mail", dest="ingest_ticket_mail", action="store_true",
         help=(
             "Download ticket photos from Gmail (subject TICKET…) into "
@@ -688,6 +701,7 @@ def _file_claims(
     tickets_root: Path,
     audit_path: Path,
     live_submit: bool,
+    allow_partial_tickets: bool = False,
 ) -> tuple[int, dict]:
     """Ticket gate → map → batch submit → move claimed. Returns (exit_code, summary)."""
     claims = [c for day in day_results for c in day.claims]
@@ -696,6 +710,7 @@ def _file_claims(
         "filed": 0,
         "failed": 0,
         "skipped_already_claimed": 0,
+        "skipped_no_ticket": 0,
         "audit_path": str(audit_path),
         "gate_ok": True,
         "browser": "live" if live_submit else "fake",
@@ -721,6 +736,20 @@ def _file_claims(
     scan = scan_ticket_dir(ticket_dir)
     if scan.missing_directory:
         _progress(f"WARNING: ticket directory does not exist: {ticket_dir}")
+
+    if allow_partial_tickets:
+        claims, dropped = filter_claims_to_ticketed_dates(claims, scan)
+        file_summary["skipped_no_ticket"] = len(dropped)
+        if dropped:
+            _progress(
+                "Partial tickets: skipping claim date(s) without files: "
+                + ", ".join(dropped)
+            )
+        if not claims:
+            _progress("No claims left after partial-ticket filter.")
+            file_summary["gate_ok"] = False
+            return 1, file_summary
+
     result = match_tickets_to_claims(claims, scan)
     report = format_match_errors(result)
     if gate_blocks_filing(result):
@@ -911,6 +940,7 @@ def _run_weekly_file(
     out_dir: Path,
     live_submit: bool,
     audit_path: Path | None,
+    allow_partial_tickets: bool = False,
 ) -> int:
     audit = audit_path or (Path(out_dir) / "filing-audit.jsonl")
     file_rc, file_summary = _file_claims(
@@ -919,6 +949,7 @@ def _run_weekly_file(
         tickets_root=tickets_root,
         audit_path=audit,
         live_submit=live_submit,
+        allow_partial_tickets=allow_partial_tickets,
     )
     print(json.dumps({"filing": file_summary}, indent=2))
     return file_rc
@@ -1179,6 +1210,7 @@ def _run_weekly_ops(
     force: bool,
     digest_strict: bool,
     audit_path: Path | None = None,
+    allow_partial_tickets: bool = False,
 ) -> int:
     """Composition root for Friday / catch-up weekly chain (FR32–FR34, FR39)."""
     from trainline.adapters.schedule_window import anchor_friday, prior_working_week
@@ -1239,6 +1271,7 @@ def _run_weekly_ops(
         out_dir=out_dir,
         live_submit=live_submit,
         audit_path=audit_path,
+        allow_partial_tickets=allow_partial_tickets,
     )
     if file_rc != 0:
         _progress("Weekly ops: file step failed — not marking complete")
@@ -1308,6 +1341,9 @@ def main(argv=None) -> int:
             force=bool(getattr(args, "weekly_ops_force", False)),
             digest_strict=bool(args.digest_strict),
             audit_path=audit_path,
+            allow_partial_tickets=bool(
+                getattr(args, "allow_partial_tickets", False)
+            ),
         )
 
     if args.check_tickets:
@@ -1408,6 +1444,9 @@ def main(argv=None) -> int:
             tickets_root=tickets_root,
             audit_path=audit_path,
             live_submit=bool(args.live_submit),
+            allow_partial_tickets=bool(
+                getattr(args, "allow_partial_tickets", False)
+            ),
         )
         print(json.dumps({"filing": file_summary}, indent=2))
 
