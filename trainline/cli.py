@@ -704,6 +704,36 @@ def _resolve_browser_session(*, live_submit: bool):
     return FakeBrowserSession()
 
 
+def _claim_lifecycle_path(audit_path: Path) -> Path:
+    """Lifecycle store lives alongside the filing audit log (AD-18, AD-19)."""
+    return Path(audit_path).parent / "claim-lifecycle.json"
+
+
+def _record_lifecycle_submissions(audit_path: Path, batch, items) -> None:
+    """CLI-only mutation (AD-19): record ``submitted`` for successful SWR files.
+
+    Captcha abandon (``ok=False``) and non-SWR refs (``FAKE-*``,
+    ``SUBMITTED-*``) never reach ``normalize_claim_id`` and are skipped.
+    """
+    from trainline.adapters.claim_lifecycle import LifecycleStore
+    from trainline.adapters.gmail.claim_mail import normalize_claim_id
+
+    store: LifecycleStore | None = None
+    for submit_result, (claim, _fields, _ticket) in zip(batch.results, items):
+        if not submit_result.ok:
+            continue
+        claim_id = normalize_claim_id(submit_result.swr_reference or "")
+        if claim_id is None:
+            continue
+        if store is None:
+            store = LifecycleStore(_claim_lifecycle_path(audit_path))
+        store.record_submitted(
+            claim_id,
+            date=claim.date,
+            direction=claim.direction.value,
+        )
+
+
 def _file_claims(
     day_results,
     *,
@@ -887,6 +917,7 @@ def _file_claims(
             }
         )
     file_summary["newly_filed"] = newly
+    _record_lifecycle_submissions(audit_path, batch, items)
     _progress(
         f"Filing done: {batch.filed} filed, {batch.failed} failed "
         f"(audit: {audit_path})"

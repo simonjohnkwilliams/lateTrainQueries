@@ -5,25 +5,7 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="070f7bf0-ba7a-4e21-a970-92d2f50ce26e" name="Default Changelist" comment="">
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/_bmad-output/implementation-artifacts/manual-validation-checklist.md" beforeDir="false" afterPath="$PROJECT_DIR$/_bmad-output/implementation-artifacts/manual-validation-checklist.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/_bmad-output/implementation-artifacts/sprint-status.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/_bmad-output/implementation-artifacts/sprint-status.yaml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/_bmad-output/planning-artifacts/architecture/architecture-lateTrainQueries-2026-07-14/.memlog.md" beforeDir="false" afterPath="$PROJECT_DIR$/_bmad-output/planning-artifacts/architecture/architecture-lateTrainQueries-2026-07-14/.memlog.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/_bmad-output/planning-artifacts/architecture/architecture-lateTrainQueries-2026-07-14/ARCHITECTURE-SPINE.md" beforeDir="false" afterPath="$PROJECT_DIR$/_bmad-output/planning-artifacts/architecture/architecture-lateTrainQueries-2026-07-14/ARCHITECTURE-SPINE.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/_bmad-output/planning-artifacts/epics.md" beforeDir="false" afterPath="$PROJECT_DIR$/_bmad-output/planning-artifacts/epics.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/_bmad-output/planning-artifacts/prds/prd-lateTrainQueries-2026-07-14/.memlog.md" beforeDir="false" afterPath="$PROJECT_DIR$/_bmad-output/planning-artifacts/prds/prd-lateTrainQueries-2026-07-14/.memlog.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/_bmad-output/planning-artifacts/prds/prd-lateTrainQueries-2026-07-14/addendum.md" beforeDir="false" afterPath="$PROJECT_DIR$/_bmad-output/planning-artifacts/prds/prd-lateTrainQueries-2026-07-14/addendum.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/_bmad-output/planning-artifacts/prds/prd-lateTrainQueries-2026-07-14/prd.md" beforeDir="false" afterPath="$PROJECT_DIR$/_bmad-output/planning-artifacts/prds/prd-lateTrainQueries-2026-07-14/prd.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/pytest.ini" beforeDir="false" afterPath="$PROJECT_DIR$/pytest.ini" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/requirements-dev.txt" beforeDir="false" afterPath="$PROJECT_DIR$/requirements-dev.txt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/_fakes.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/_fakes.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/conftest.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/conftest.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/test_bdd_pipeline.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_bdd_pipeline.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/test_cli.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_cli.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/test_import_boundaries.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_import_boundaries.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/test_package_imports.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_package_imports.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/trainline/adapters/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/trainline/adapters/config.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_file_cli.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_file_cli.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/trainline/cli.py" beforeDir="false" afterPath="$PROJECT_DIR$/trainline/cli.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -57,13 +39,14 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
-    &quot;kotlin-language-version-configured&quot;: &quot;true&quot;
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "SHARE_PROJECT_CONFIGURATION_FILES": "true",
+    "kotlin-language-version-configured": "true",
+    "last_opened_file_path": "C:/Users/simon/Consulting-Operating-System-Roadmap"
   }
-}</component>
+}]]></component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="$PROJECT_DIR$/test/files" />

@@ -10,6 +10,7 @@ import pytest
 
 from tests._fakes import FakeResponse, FakeSession, FakeSmtpTransport
 from trainline import cli
+from trainline.adapters.claim_lifecycle import LifecycleStore
 from trainline.adapters.claim_submission import FakeBrowserSession
 from trainline.adapters.hsp_client import HspClient
 
@@ -154,6 +155,110 @@ def test_file_happy_path_fake_browser_audit_and_claimed(tmp_path, monkeypatch):
     assert len(session.fills) == 1
     assert len(transport.sent) == 1
     assert '"filed": 1' in out.getvalue() or '"filed":1' in out.getvalue().replace(" ", "")
+
+
+class _SwrRefBrowserSession:
+    """Offline stub returning a real ``SWR-####-###-###`` reference (Story 9.2)."""
+
+    def __init__(self, ref="SWR-0218-108-579"):
+        self.ref = ref
+        self.fills: list[dict] = []
+
+    def submit_delay_repay(self, fields, ticket_path):
+        self.fills.append({"journey_date": fields.journey_date})
+        return self.ref
+
+
+@pytest.mark.offline
+def test_file_success_with_swr_reference_records_lifecycle_submitted(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    _wire_claimable_hsp(monkeypatch, tmp_path)
+    ready = tmp_path / "tickets" / "processed" / "ready_to_claim"
+    claimed = tmp_path / "tickets" / "claimed"
+    ready.mkdir(parents=True)
+    claimed.mkdir(parents=True)
+    (ready / "07-10-ABC123.jpg").write_bytes(b"ticket-bytes")
+
+    session = _SwrRefBrowserSession("SWR-0218-108-579")
+    monkeypatch.setattr(cli, "_file_browser_factory", lambda: session)
+
+    out, err = io.StringIO(), io.StringIO()
+    with redirect_stdout(out), redirect_stderr(err):
+        code = cli.main([
+            "--file",
+            "--from-date", "2026-07-10",
+            "--to-date", "2026-07-10",
+            "--out-dir", "Results",
+            "--cache-dir", str(tmp_path / "cache"),
+            "--tickets-root", str(tmp_path / "tickets"),
+        ])
+    assert code == 0, err.getvalue()
+
+    lifecycle_path = tmp_path / "Results" / "claim-lifecycle.json"
+    assert lifecycle_path.is_file()
+    store = LifecycleStore(lifecycle_path)
+    row = store.get("SWR-0218-108-579")
+    assert row is not None
+    assert row.status == "submitted"
+    assert row.date == "2026-07-10"
+    assert row.direction in {"outbound", "inbound"}
+
+
+@pytest.mark.offline
+def test_file_fake_reference_does_not_record_lifecycle(tmp_path, monkeypatch):
+    """FakeBrowserSession refs (``FAKE-SWR-…``) are not real SWR ids — no row."""
+    monkeypatch.chdir(tmp_path)
+    _wire_claimable_hsp(monkeypatch, tmp_path)
+    ready = tmp_path / "tickets" / "processed" / "ready_to_claim"
+    claimed = tmp_path / "tickets" / "claimed"
+    ready.mkdir(parents=True)
+    claimed.mkdir(parents=True)
+    (ready / "07-10-ABC123.jpg").write_bytes(b"ticket-bytes")
+
+    session = FakeBrowserSession()
+    monkeypatch.setattr(cli, "_file_browser_factory", lambda: session)
+
+    out, err = io.StringIO(), io.StringIO()
+    with redirect_stdout(out), redirect_stderr(err):
+        code = cli.main([
+            "--file",
+            "--from-date", "2026-07-10",
+            "--to-date", "2026-07-10",
+            "--out-dir", "Results",
+            "--cache-dir", str(tmp_path / "cache"),
+            "--tickets-root", str(tmp_path / "tickets"),
+        ])
+    assert code == 0, err.getvalue()
+    assert not (tmp_path / "Results" / "claim-lifecycle.json").exists()
+
+
+@pytest.mark.offline
+def test_file_captcha_abandon_does_not_record_lifecycle(tmp_path, monkeypatch):
+    """Submission failure (e.g. reCAPTCHA abandon) must not write a lifecycle row."""
+    monkeypatch.chdir(tmp_path)
+    _wire_claimable_hsp(monkeypatch, tmp_path)
+    ready = tmp_path / "tickets" / "processed" / "ready_to_claim"
+    claimed = tmp_path / "tickets" / "claimed"
+    ready.mkdir(parents=True)
+    claimed.mkdir(parents=True)
+    (ready / "07-10-ABC123.jpg").write_bytes(b"ticket-bytes")
+
+    session = FakeBrowserSession(fail_dates={"2026-07-10"})
+    monkeypatch.setattr(cli, "_file_browser_factory", lambda: session)
+
+    out, err = io.StringIO(), io.StringIO()
+    with redirect_stdout(out), redirect_stderr(err):
+        cli.main([
+            "--file",
+            "--from-date", "2026-07-10",
+            "--to-date", "2026-07-10",
+            "--out-dir", "Results",
+            "--cache-dir", str(tmp_path / "cache"),
+            "--tickets-root", str(tmp_path / "tickets"),
+        ])
+    assert not (tmp_path / "Results" / "claim-lifecycle.json").exists()
 
 
 @pytest.mark.offline
