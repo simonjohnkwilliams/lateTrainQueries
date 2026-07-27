@@ -5,6 +5,7 @@ Pure helpers — no browser imports. May import ``engine.models`` only (AD-2).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from trainline.engine.models import Claim
 
@@ -86,6 +87,14 @@ def leaving_at_search_slot(hhmm: str) -> str:
     total = int(hour_s) * 60 + int(min_s)
     slot = (total // 15) * 15 % 1440
     return f"{slot // 60:02d}:{slot % 60:02d}"
+
+
+def ticket_medium_for_path(ticket_path: Path | str) -> str:
+    """SWR ticket-type control: PDFs are e-tickets; photos are paper."""
+    suffix = Path(ticket_path).suffix.casefold()
+    if suffix == ".pdf":
+        return "E-ticket/M-ticket"
+    return "Paper"
 
 
 def map_claim_for_swr(

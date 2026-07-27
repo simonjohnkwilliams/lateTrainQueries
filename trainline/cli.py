@@ -35,7 +35,7 @@ from trainline.adapters.config import (
 )
 from trainline.adapters.hsp_client import HspClient, fetch_day
 from trainline.adapters.notification import digest_subject, render_digest, send_digest
-from trainline.adapters.swr_mapping import map_claim_for_swr
+from trainline.adapters.swr_mapping import map_claim_for_swr, ticket_medium_for_path
 from trainline.adapters.ticket_gate import (
     filter_claims_not_already_claimed,
     filter_claims_to_ticketed_dates,
@@ -844,6 +844,8 @@ def _file_claims(
             )
             file_summary["gate_ok"] = False
             return 1, file_summary
+        # Booking confirmation PDFs are e-tickets; paper photos stay Paper.
+        ticket_path = Path(ticket)
         items.append(
             (
                 claim,
@@ -851,8 +853,9 @@ def _file_claims(
                     claim,
                     ticket_price=price,
                     ticket_reference=reference,
+                    ticket_medium=ticket_medium_for_path(ticket_path),
                 ),
-                Path(ticket),
+                ticket_path,
             )
         )
 

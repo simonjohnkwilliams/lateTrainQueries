@@ -62,3 +62,13 @@ def test_map_claim_crs_table_extensible():
         crs_names={"XYZ": "Test Town", "WAT": "London Waterloo"},
     )
     assert fields.origin_station == "Test Town"
+
+
+@pytest.mark.offline
+def test_ticket_medium_for_path_pdf_is_eticket():
+    from trainline.adapters.swr_mapping import ticket_medium_for_path
+
+    assert ticket_medium_for_path("07-24-X.pdf") == "E-ticket/M-ticket"
+    assert ticket_medium_for_path("07-24-X.PDF") == "E-ticket/M-ticket"
+    assert ticket_medium_for_path("07-24-X.jpg") == "Paper"
+    assert ticket_medium_for_path("07-24-X.png") == "Paper"

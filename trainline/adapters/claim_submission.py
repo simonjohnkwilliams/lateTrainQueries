@@ -339,9 +339,10 @@ def _run_swr_wizard(
         fc_info.value.set_files(str(ticket_path))
     else:
         files.first.set_input_files(str(ticket_path))
-    page.get_by_text("Image uploaded successfully", exact=False).first.wait_for(
-        state="visible", timeout=20000
-    )
+    # Paper photos say "Image uploaded…"; e-ticket PDFs may omit "Image".
+    page.get_by_text(
+        re.compile(r"(Image )?uploaded successfully", re.I)
+    ).first.wait_for(state="visible", timeout=20000)
     page.wait_for_timeout(500)
 
     price = _attr(fields, "ticket_price", "")
