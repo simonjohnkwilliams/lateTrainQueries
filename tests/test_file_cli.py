@@ -96,6 +96,7 @@ def test_file_gate_blocks_submit_but_writes_claims(tmp_path, monkeypatch):
     with redirect_stdout(out), redirect_stderr(err):
         code = cli.main([
             "--file",
+            "--strict-all-tickets",
             "--from-date", "2026-07-10",
             "--to-date", "2026-07-10",
             "--out-dir", "Results",

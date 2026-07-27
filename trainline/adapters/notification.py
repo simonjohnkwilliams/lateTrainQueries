@@ -17,13 +17,14 @@ from email.message import EmailMessage
 from trainline.engine.models import Band, FetchStatus
 
 # Presentation labels — mirror storage CSV (do not import storage; AD-2).
-_BAND_LABEL = {
+BAND_LABEL = {
     Band.NONE: "none",
     Band.B15_29: "15-29",
     Band.B30_59: "30-59",
     Band.B60_119: "60-119",
     Band.B120_PLUS: "120+",
 }
+_BAND_LABEL = BAND_LABEL  # backwards-compatible alias
 
 
 def digest_subject(day_results) -> str:

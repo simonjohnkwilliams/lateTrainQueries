@@ -24,3 +24,6 @@ __pycache__/
 
 # CLI claim output
 Results/
+
+_dry_signoff/
+

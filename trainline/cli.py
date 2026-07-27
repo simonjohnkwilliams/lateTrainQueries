@@ -630,9 +630,19 @@ def _parse_args(argv):
         "--allow-partial-tickets",
         dest="allow_partial_tickets",
         action="store_true",
+        default=True,
         help=(
-            "With --file / --weekly-ops: file claims that have matching tickets "
-            "and skip claim dates with no ticket (strict FR25 still default)"
+            "File only claim dates that have tickets; skip the rest "
+            "(default for --weekly-ops / --file)"
+        ),
+    )
+    parser.add_argument(
+        "--strict-all-tickets",
+        dest="allow_partial_tickets",
+        action="store_false",
+        help=(
+            "Require a ticket for every claimable date before filing "
+            "(legacy FR25 whole-week gate)"
         ),
     )
     parser.add_argument(
@@ -701,26 +711,68 @@ def _file_claims(
     tickets_root: Path,
     audit_path: Path,
     live_submit: bool,
-    allow_partial_tickets: bool = False,
+    allow_partial_tickets: bool = True,
 ) -> tuple[int, dict]:
-    """Ticket gate → map → batch submit → move claimed. Returns (exit_code, summary)."""
-    claims = [c for day in day_results for c in day.claims]
-    file_summary = {
+    """Ticket gate → map → batch submit → move claimed. Returns (exit_code, summary).
+
+    Default ``allow_partial_tickets=True``: file only claim dates that have
+    tickets; skip the rest (no whole-week FR25 block).
+    """
+    from trainline.adapters.ticket_gate import claim_date_to_mm_dd
+
+    all_claims = [c for day in day_results for c in day.claims]
+    claim_dates = sorted({c.date for c in all_claims})
+    claims = list(all_claims)
+    file_summary: dict = {
         "claims_found": len(claims),
         "filed": 0,
         "failed": 0,
         "skipped_already_claimed": 0,
-        "skipped_no_ticket": 0,
+        "skipped_no_ticket": [],
+        "newly_filed": [],
+        "surplus_tickets": [],
         "audit_path": str(audit_path),
         "gate_ok": True,
         "browser": "live" if live_submit else "fake",
     }
+    layout = tickets_layout(tickets_root)
+    layout.ensure()
+
+    _progress(f"Ticket gate: scanning {ticket_dir.resolve()}")
+    scan = scan_ticket_dir(ticket_dir)
+    if scan.missing_directory:
+        _progress(f"WARNING: ticket directory does not exist: {ticket_dir}")
+
+    # Surplus: ready tickets whose MM-DD has no claimable delay that day
+    claim_mm = {claim_date_to_mm_dd(d) for d in claim_dates}
+    surplus = []
+    for ticket in scan.valid:
+        if ticket.mm_dd not in claim_mm:
+            year = (claim_dates[0][:4] if claim_dates else "2026")
+            surplus.append(
+                {
+                    "date": f"{year}-{ticket.mm_dd}",
+                    "path": str(ticket.path),
+                    "mm_dd": ticket.mm_dd,
+                }
+            )
+    # Prefer ISO year from window if we can map mm-dd
+    for row in surplus:
+        mm, dd = row["mm_dd"].split("-")
+        matched = next(
+            (d for d in claim_dates if d[5:] == f"{mm}-{dd}"),
+            None,
+        )
+        # No claim that day — use any claim year in window or leave stamped
+        if claim_dates:
+            row["date"] = f"{claim_dates[0][:4]}-{mm}-{dd}"
+        if matched:
+            row["date"] = matched
+    file_summary["surplus_tickets"] = surplus
+
     if not claims:
         _progress("No claims to file.")
         return 0, file_summary
-
-    layout = tickets_layout(tickets_root)
-    layout.ensure()
 
     before = len(claims)
     claims = filter_claims_not_already_claimed(claims, layout.claimed)
@@ -732,22 +784,27 @@ def _file_claims(
         _progress("Nothing left to file after claimed/ filter.")
         return 0, file_summary
 
-    _progress(f"Ticket gate: scanning {ticket_dir.resolve()}")
-    scan = scan_ticket_dir(ticket_dir)
-    if scan.missing_directory:
-        _progress(f"WARNING: ticket directory does not exist: {ticket_dir}")
-
     if allow_partial_tickets:
         claims, dropped = filter_claims_to_ticketed_dates(claims, scan)
-        file_summary["skipped_no_ticket"] = len(dropped)
+        file_summary["skipped_no_ticket"] = list(dropped)
         if dropped:
             _progress(
                 "Partial tickets: skipping claim date(s) without files: "
                 + ", ".join(dropped)
             )
         if not claims:
-            _progress("No claims left after partial-ticket filter.")
+            _progress(
+                "No ticketed claims to file this run — continuing to ops email."
+            )
+            return 0, file_summary
+    else:
+        # Strict: every claim date needs a ticket
+        result = match_tickets_to_claims(claims, scan)
+        if gate_blocks_filing(result):
+            print(format_match_errors(result), file=sys.stderr)
+            _progress("Ticket gate FAILED - assess output kept; submission skipped.")
             file_summary["gate_ok"] = False
+            file_summary["skipped_no_ticket"] = list(result.missing_dates)
             return 1, file_summary
 
     result = match_tickets_to_claims(claims, scan)
@@ -815,6 +872,18 @@ def _file_claims(
     batch = submit_all_claims(items, session, audit_path=audit_path)
     file_summary["filed"] = batch.filed
     file_summary["failed"] = batch.failed
+    newly = []
+    for submit_result, (claim, _fields, ticket) in zip(batch.results, items):
+        newly.append(
+            {
+                "date": claim.date,
+                "direction": claim.direction.value,
+                "outcome": "filed" if submit_result.ok else "failed",
+                "reference": submit_result.swr_reference,
+                "ticket": ticket.name,
+            }
+        )
+    file_summary["newly_filed"] = newly
     _progress(
         f"Filing done: {batch.filed} filed, {batch.failed} failed "
         f"(audit: {audit_path})"
@@ -940,8 +1009,8 @@ def _run_weekly_file(
     out_dir: Path,
     live_submit: bool,
     audit_path: Path | None,
-    allow_partial_tickets: bool = False,
-) -> int:
+    allow_partial_tickets: bool = True,
+) -> tuple[int, dict]:
     audit = audit_path or (Path(out_dir) / "filing-audit.jsonl")
     file_rc, file_summary = _file_claims(
         day_results,
@@ -952,7 +1021,28 @@ def _run_weekly_file(
         allow_partial_tickets=allow_partial_tickets,
     )
     print(json.dumps({"filing": file_summary}, indent=2))
-    return file_rc
+    return file_rc, file_summary
+
+
+def _claimable_rows_for_ops(day_results) -> list[dict]:
+    from trainline.adapters.notification import BAND_LABEL
+    from trainline.engine.models import FetchStatus
+
+    rows = []
+    for day in day_results:
+        if day.status is not FetchStatus.OK:
+            continue
+        for c in day.claims:
+            rows.append(
+                {
+                    "date": c.date,
+                    "direction": c.direction.value,
+                    "band": BAND_LABEL[c.band],
+                    "route": f"{c.origin}->{c.destination}",
+                    "delay": c.delay,
+                }
+            )
+    return rows
 
 
 def _run_weekly_ops_email(
@@ -960,11 +1050,64 @@ def _run_weekly_ops_email(
     day_results,
     credentials_path: str | None,
     strict: bool,
+    filing_summary: dict | None = None,
+    anchor_friday: str | None = None,
 ) -> int:
-    """Send digest/ops email last (FR34). Tables 1–2 land in Story 7.4."""
-    return _maybe_send_digest(
-        day_results, strict=strict, credentials_path=credentials_path
+    """Send ops email last (FR34/FR36 Table 1). Table 2 deferred."""
+    from trainline.adapters.ops_email import ops_email_subject, render_ops_email
+
+    filing_summary = filing_summary or {}
+    claimable = _claimable_rows_for_ops(day_results)
+    skipped = filing_summary.get("skipped_no_ticket") or []
+    if isinstance(skipped, int):
+        skipped = []
+    table1 = {
+        "claimable": claimable,
+        "newly_filed": list(filing_summary.get("newly_filed") or []),
+        "skipped_no_ticket": list(skipped),
+        "surplus_tickets": list(filing_summary.get("surplus_tickets") or []),
+        "rejections": list(filing_summary.get("rejections") or []),
+    }
+    anchor = anchor_friday or "unknown"
+    html, text = render_ops_email(table1=table1, table2=None, anchor_friday=anchor)
+    subject = ops_email_subject(
+        anchor_friday=anchor,
+        filed=int(filing_summary.get("filed") or 0),
+        claimable=len(claimable),
     )
+
+    # Dry / sandbox: write email to disk instead of sending (non-impactful).
+    sink = (os.environ.get("TRAINLINE_OPS_EMAIL_FILE") or "").strip()
+    if sink:
+        path = Path(sink)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            f"Subject: {subject}\n\n{text}\n\n--- HTML ---\n{html}\n",
+            encoding="utf-8",
+        )
+        _progress(f"Ops email written to {path} (TRAINLINE_OPS_EMAIL_FILE)")
+        return 0
+
+    # Reuse digest transport path with pre-rendered body
+    from trainline.adapters.config import EmailConfigError, load_email_config
+
+    try:
+        prepared = _try_gmail_digest_transport(credentials_path)
+        if prepared is not None:
+            gmail_headers, transport = prepared
+            send_digest(subject, html, text, gmail_headers, transport=transport)
+            _progress(f"Ops email sent to {gmail_headers.digest_to}")
+            return 0
+        email_cfg = load_email_config(credentials_path=credentials_path)
+        send_digest(subject, html, text, email_cfg)
+        _progress(f"Ops email sent to {email_cfg.digest_to}")
+        return 0
+    except EmailConfigError as exc:
+        _progress(f"Ops email skipped: {exc}")
+        return 1 if strict else 0
+    except Exception as exc:
+        _progress(f"Ops email failed: {exc}")
+        return 1 if strict else 0
 
 
 def _ticket_drop_hash_path(out_dir: Path) -> Path:
@@ -1210,7 +1353,7 @@ def _run_weekly_ops(
     force: bool,
     digest_strict: bool,
     audit_path: Path | None = None,
-    allow_partial_tickets: bool = False,
+    allow_partial_tickets: bool = True,
 ) -> int:
     """Composition root for Friday / catch-up weekly chain (FR32–FR34, FR39)."""
     from trainline.adapters.schedule_window import anchor_friday, prior_working_week
@@ -1240,14 +1383,21 @@ def _run_weekly_ops(
 
     config = replace(config, send_digest=True)
 
-    ingest_rc = _run_ingest_ticket_mail(
-        tickets_root=tickets_root,
-        out_dir=out_dir,
-        credentials_path=credentials_path,
-    )
-    if ingest_rc != 0:
-        _progress("Weekly ops: ticket-mail ingest failed — not marking complete")
-        return ingest_rc
+    if (os.environ.get("TRAINLINE_SKIP_TICKET_INGEST") or "").strip() in {
+        "1",
+        "true",
+        "yes",
+    }:
+        _progress("Skipping ticket-mail ingest (TRAINLINE_SKIP_TICKET_INGEST)")
+    else:
+        ingest_rc = _run_ingest_ticket_mail(
+            tickets_root=tickets_root,
+            out_dir=out_dir,
+            credentials_path=credentials_path,
+        )
+        if ingest_rc != 0:
+            _progress("Weekly ops: ticket-mail ingest failed — not marking complete")
+            return ingest_rc
 
     assess_rc, day_results = _run_weekly_assess(
         dates=dates,
@@ -1264,7 +1414,7 @@ def _run_weekly_ops(
         _progress("Weekly ops: classify failed — not marking complete")
         return classify_rc
 
-    file_rc = _run_weekly_file(
+    file_rc, file_summary = _run_weekly_file(
         day_results=day_results,
         ticket_dir=ticket_dir,
         tickets_root=tickets_root,
@@ -1281,6 +1431,8 @@ def _run_weekly_ops(
         day_results=day_results,
         credentials_path=credentials_path,
         strict=digest_strict,
+        filing_summary=file_summary,
+        anchor_friday=anchor.isoformat(),
     )
     if email_rc != 0:
         _progress("Weekly ops: email failed — not marking complete")

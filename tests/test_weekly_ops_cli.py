@@ -25,7 +25,7 @@ def test_weekly_ops_call_order_ingest_assess_classify_file_email(monkeypatch, tm
         cli, "_run_weekly_classify", lambda **kw: order.append("classify") or 0
     )
     monkeypatch.setattr(
-        cli, "_run_weekly_file", lambda **kw: order.append("file") or 0
+        cli, "_run_weekly_file", lambda **kw: order.append("file") or (0, {})
     )
     monkeypatch.setattr(
         cli, "_run_weekly_ops_email", lambda **kw: order.append("email") or 0
@@ -51,7 +51,7 @@ def test_weekly_ops_uses_prior_working_week(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "_run_ingest_ticket_mail", lambda **kw: 0)
     monkeypatch.setattr(cli, "_run_weekly_assess", fake_assess)
     monkeypatch.setattr(cli, "_run_weekly_classify", lambda **kw: 0)
-    monkeypatch.setattr(cli, "_run_weekly_file", lambda **kw: 0)
+    monkeypatch.setattr(cli, "_run_weekly_file", lambda **kw: (0, {}))
     monkeypatch.setattr(cli, "_run_weekly_ops_email", lambda **kw: 0)
     monkeypatch.setattr(cli, "_mark_weekly_complete", lambda *a, **k: None)
     monkeypatch.setattr(
@@ -71,7 +71,7 @@ def test_weekly_ops_partial_failure_does_not_mark_complete(monkeypatch, tmp_path
     monkeypatch.setattr(cli, "_run_ingest_ticket_mail", lambda **kw: 0)
     monkeypatch.setattr(cli, "_run_weekly_assess", lambda **kw: (0, []))
     monkeypatch.setattr(cli, "_run_weekly_classify", lambda **kw: 0)
-    monkeypatch.setattr(cli, "_run_weekly_file", lambda **kw: 1)
+    monkeypatch.setattr(cli, "_run_weekly_file", lambda **kw: (1, {}))
     monkeypatch.setattr(cli, "_run_weekly_ops_email", lambda **kw: 0)
     monkeypatch.setattr(
         "trainline.adapters.weekly_marker.is_complete", lambda *a, **k: False
