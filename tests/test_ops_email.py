@@ -123,12 +123,38 @@ def test_render_ops_email_table1_surplus_and_filed():
 
 @pytest.mark.offline
 def test_render_ops_email_table2_statuses():
-    pytest.skip("Table 2 deferred to next epic")
+    from trainline.adapters.ops_email import render_ops_email
+
+    table2 = _table2_fixture()
+    html, text = render_ops_email(
+        table1=_table1_fixture(), table2=table2, anchor_friday="2026-07-31"
+    )
+    blob = (html + text).casefold()
+    assert "table 2" in blob
+    # Three statuses render with their claim ids and journey dates
+    assert "swr-0001-000-001" in blob
+    assert "swr-0002-000-002" in blob
+    assert "swr-0003-000-003" in blob
+    assert "received" in blob
+    assert "approved" in blob
+    assert "in_flight" in blob
+    assert "2026-07-01" in blob
+    assert "2026-07-02" in blob
+    assert "2026-07-03" in blob
 
 
 @pytest.mark.offline
 def test_render_ops_email_omits_reported_paid_rows():
-    pytest.skip("Table 2 deferred to next epic")
+    """Renderer only renders what it is given; the CLI ``_build_table2``
+    filters reported-paid rows before calling render (see test_table2_cli)."""
+    from trainline.adapters.ops_email import render_ops_email
+
+    # If table2 is empty/None the Table 2 section is omitted entirely
+    html, text = render_ops_email(
+        table1=_table1_fixture(), table2=[], anchor_friday="2026-07-31"
+    )
+    blob = (html + text).casefold()
+    assert "table 2" not in blob
 
 
 @pytest.mark.offline

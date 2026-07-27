@@ -2,7 +2,7 @@
 title: 'Epic 9 remaining — claim follow-up (9.2–9.4)'
 type: 'feature'
 created: '2026-07-27'
-status: 'in-progress'
+status: 'done'
 baseline_revision: '6ed3ac4'
 review_loop_iteration: 0
 followup_review_recommended: false
