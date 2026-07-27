@@ -38,9 +38,47 @@ def test_unique_drop_path_dedups_identical_bytes(tmp_path: Path):
 
 
 @pytest.mark.offline
-def test_unique_drop_path_allows_different_bytes(tmp_path: Path):
+def test_unique_drop_path_rematerialises_when_file_missing(tmp_path: Path):
+    """Hash recorded but file deleted (e.g. quarantine) must allow re-save."""
+    dest = tmp_path / "unclassified"
+    dest.mkdir()
     store = DropHashStore(tmp_path / "hashes.json")
-    a = unique_drop_path(tmp_path, b"one", "a.jpg", store=store)
-    b = unique_drop_path(tmp_path, b"two", "b.jpg", store=store)
-    assert a is not None and b is not None
-    assert a != b
+    data = b"\xff\xd8\xff\xd9digital"
+    first = unique_drop_path(dest, data, "shot.jpg", store=store)
+    assert first is not None
+    first.write_bytes(data)
+    first.unlink()
+    assert not first.exists()
+    again = unique_drop_path(
+        dest,
+        data,
+        "shot.jpg",
+        store=store,
+        presence_roots=[dest],
+    )
+    assert again is not None
+    again.write_bytes(data)
+    assert again.exists()
+
+
+@pytest.mark.offline
+def test_unique_drop_path_still_dedups_when_file_elsewhere(tmp_path: Path):
+    dest = tmp_path / "unclassified"
+    ready = tmp_path / "ready"
+    dest.mkdir()
+    ready.mkdir()
+    store = DropHashStore(tmp_path / "hashes.json")
+    data = b"\xff\xd8\xff\xd9moved"
+    first = unique_drop_path(dest, data, "a.jpg", store=store)
+    assert first is not None
+    moved = ready / first.name
+    first.write_bytes(data)
+    first.rename(moved)
+    again = unique_drop_path(
+        dest,
+        data,
+        "b.jpg",
+        store=store,
+        presence_roots=[dest, ready],
+    )
+    assert again is None

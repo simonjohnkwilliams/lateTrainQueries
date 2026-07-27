@@ -940,6 +940,15 @@ def _ticket_drop_hash_path(out_dir: Path) -> Path:
     return Path(out_dir) / "ticket-drop-hashes.json"
 
 
+def _is_insufficient_gmail_scope(exc: BaseException) -> bool:
+    msg = str(exc).casefold()
+    return (
+        "insufficient" in msg
+        or "authentication scopes" in msg
+        or "403" in msg and "permission" in msg
+    )
+
+
 def _ingest_from_gmail_client(
     client,
     *,
@@ -948,16 +957,25 @@ def _ingest_from_gmail_client(
     subject_prefix: str = "TICKET",
     label: str | None = None,
     ingested_label: str = "trainline-ticket-ingested",
+    presence_roots: list[Path] | None = None,
 ) -> int:
-    """Save Gmail ticket attachments into ``dest_dir`` (composition helper)."""
+    """Save Gmail ticket attachments into ``dest_dir`` (composition helper).
+
+    Label/modify is best-effort: missing ``gmail.modify`` must not block
+    downloads (hash store still dedups). Re-auth restores label idempotency.
+    """
+    from trainline.adapters.gmail.errors import GmailError
     from trainline.adapters.gmail.ticket_mail import (
         build_ticket_mail_query,
         extract_image_attachments,
+        message_subject,
+        subject_matches_ticket_prefix,
     )
     from trainline.adapters.ticket_drop import DropHashStore, unique_drop_path
 
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
+    roots = [Path(p) for p in (presence_roots or [dest_dir])]
     store = DropHashStore(hash_store_path)
     query = build_ticket_mail_query(
         subject_prefix=subject_prefix,
@@ -970,35 +988,80 @@ def _ingest_from_gmail_client(
         _progress("No matching ticket emails.")
         return 0
 
-    ingested_id = client.ensure_label_id(ingested_label)
+    ingested_id: str | None = None
+    try:
+        ingested_id = client.ensure_label_id(ingested_label)
+    except GmailError as exc:
+        if not _is_insufficient_gmail_scope(exc):
+            raise
+        _progress(
+            "WARNING: cannot create/read Gmail labels (need gmail.modify). "
+            "Saving attachments anyway; re-run: python -m trainline --gmail-auth"
+        )
+
+    def _file_message(mid: str) -> None:
+        """Mark ingested + archive out of Primary inbox (remove INBOX/UNREAD)."""
+        if ingested_id is None:
+            _progress(
+                f"WARNING: cannot file message {mid} (no label id / scopes). "
+                "Re-run: python -m trainline --gmail-auth"
+            )
+            return
+        try:
+            client.modify_message(
+                mid,
+                add_label_ids=[ingested_id],
+                remove_label_ids=["INBOX", "UNREAD"],
+            )
+        except GmailError as exc:
+            if not _is_insufficient_gmail_scope(exc):
+                raise
+            _progress(
+                "WARNING: could not file message out of inbox "
+                f"({mid}). Re-run: python -m trainline --gmail-auth"
+            )
+
     saved = duplicates = skipped = 0
     for hit in hits:
         mid = hit.get("id")
         if not mid:
             continue
         msg = client.get_message(mid)
+        subject = message_subject(msg)
+        if label is None and not subject_matches_ticket_prefix(
+            subject, prefix=subject_prefix
+        ):
+            skipped += 1
+            _progress(
+                f"Skipping non-prefix subject ({mid}): {subject!r}"
+            )
+            continue
         refs = extract_image_attachments(msg)
         if not refs:
             skipped += 1
-            client.modify_message(
-                mid, add_label_ids=[ingested_id], remove_label_ids=["UNREAD"]
-            )
+            _file_message(mid)
             continue
         for ref in refs:
             data = client.get_attachment(mid, ref.attachment_id)
             if not data:
                 skipped += 1
                 continue
-            path = unique_drop_path(dest_dir, data, ref.filename, store=store)
+            path = unique_drop_path(
+                dest_dir,
+                data,
+                ref.filename,
+                store=store,
+                presence_roots=roots,
+            )
             if path is None:
                 duplicates += 1
                 continue
             path.write_bytes(data)
             saved += 1
             _progress(f"Saved ticket photo -> {path}")
-        client.modify_message(
-            mid, add_label_ids=[ingested_id], remove_label_ids=["UNREAD"]
-        )
+        # Always file after handling a prefix-matching Primary message so the
+        # inbox no longer needs action (even if all attachments were duplicates).
+        _file_message(mid)
     _progress(
         f"Ticket mail ingest: saved={saved} duplicates={duplicates} skipped={skipped}"
     )
@@ -1033,7 +1096,15 @@ def _run_ingest_ticket_mail(
         digest_to=file_cfg.digest_to,
     )
     try:
+        from trainline.adapters.gmail.auth import token_missing_required_scopes
+
         creds = get_credentials(gmail_cfg)
+        if token_missing_required_scopes(getattr(creds, "scopes", None)):
+            _progress(
+                "WARNING: Gmail token scopes incomplete (need gmail.modify). "
+                "Ingest will download without labeling until you re-auth: "
+                "python -m trainline --gmail-auth"
+            )
         client = GmailClient(creds)
         return _ingest_from_gmail_client(
             client,
@@ -1044,6 +1115,12 @@ def _run_ingest_ticket_mail(
             ingested_label=os.environ.get(
                 "TICKET_MAIL_INGESTED_LABEL", "trainline-ticket-ingested"
             ),
+            presence_roots=[
+                layout.unclassified,
+                layout.ready_to_claim,
+                layout.rejected,
+                layout.claimed,
+            ],
         )
     except GmailAuthError as exc:
         _progress(f"ERROR: {exc}")

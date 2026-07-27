@@ -55,7 +55,23 @@ $argv = @("-m", "trainline", "--weekly-ops")
 if ($LiveSubmit) { $argv += "--live-submit" }
 if ($Force) { $argv += "--weekly-ops-force" }
 
+$logDir = Join-Path $ProjectRoot "Results\logs"
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+$stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$logFile = Join-Path $logDir "weekly-ops-$stamp.log"
+
 Write-Host "[weekly_ops] ProjectRoot=$ProjectRoot"
 Write-Host "[weekly_ops] Running: python $($argv -join ' ')"
-& python @argv
-exit $LASTEXITCODE
+Write-Host "[weekly_ops] Log: $logFile"
+
+$argLine = ($argv | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }) -join ' '
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+cmd /c "`"$($python.Source)`" $argLine > `"$logFile`" 2>&1"
+$rc = $LASTEXITCODE
+$ErrorActionPreference = $prevEap
+if (Test-Path -LiteralPath $logFile) {
+    Get-Content -LiteralPath $logFile | Write-Host
+    Add-Content -LiteralPath $logFile -Value "`nEXIT_CODE=$rc"
+}
+exit $rc

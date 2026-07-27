@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+# Phone-drop attachments: photos + PDF scans (Simon 2026-07-27).
 IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".pdf"})
 
 
@@ -25,12 +26,39 @@ def build_ticket_mail_query(
     label: str | None = None,
     ingested_label: str = "trainline-ticket-ingested",
 ) -> str:
-    parts = ["has:attachment", f"-label:{ingested_label}"]
+    """Primary-inbox search; callers also enforce subject prefix locally.
+
+    Unprocessed = still in Primary inbox (needs action). We intentionally do
+    **not** exclude ``ingested_label`` here: if Simon moves a mail back into
+    Primary, re-ingest must rematerialise missing files. Dedup is content-hash
+    + on-disk presence. After success we label + archive out of INBOX.
+    """
+    del ingested_label  # kept for API stability / callers
+    parts = [
+        "in:inbox",
+        "category:primary",
+        "has:attachment",
+    ]
     if label:
         parts.append(f"label:{label}")
     else:
         parts.append(f"subject:{subject_prefix}")
     return " ".join(parts)
+
+
+def message_subject(message: dict[str, Any]) -> str:
+    headers = (message.get("payload") or {}).get("headers") or []
+    for h in headers:
+        if str(h.get("name") or "").casefold() == "subject":
+            return str(h.get("value") or "")
+    return ""
+
+
+def subject_matches_ticket_prefix(
+    subject: str, *, prefix: str = "TICKET"
+) -> bool:
+    """True when subject starts with ``prefix`` (case-insensitive; FR41)."""
+    return (subject or "").lstrip().casefold().startswith(prefix.casefold())
 
 
 def _walk_parts(payload: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -46,6 +74,7 @@ def _walk_parts(payload: dict[str, Any] | None) -> list[dict[str, Any]]:
 
 
 def extract_image_attachments(message: dict[str, Any]) -> list[AttachmentRef]:
+    """Return jpg/jpeg/png/pdf attachment refs."""
     refs: list[AttachmentRef] = []
     for part in _walk_parts(message.get("payload")):
         filename = (part.get("filename") or "").strip()
@@ -55,7 +84,19 @@ def extract_image_attachments(message: dict[str, Any]) -> list[AttachmentRef]:
             continue
         mime = (part.get("mimeType") or "").lower()
         ext = Path(filename).suffix.lower()
-        if mime.startswith("image/") or ext in IMAGE_EXTENSIONS:
+        if ext in IMAGE_EXTENSIONS:
+            refs.append(
+                AttachmentRef(
+                    filename=filename, attachment_id=att_id, mime_type=mime
+                )
+            )
+            continue
+        if not ext and mime in {
+            "image/jpeg",
+            "image/jpg",
+            "image/png",
+            "application/pdf",
+        }:
             refs.append(
                 AttachmentRef(
                     filename=filename, attachment_id=att_id, mime_type=mime

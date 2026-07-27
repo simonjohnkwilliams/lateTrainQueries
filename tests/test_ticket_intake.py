@@ -327,3 +327,27 @@ def test_ticket_id_hash_fallback(tmp_path):
     tid = ticket_id_from_text_or_hash("journey only 2024", path)
     assert len(tid) == 8
     assert tid.isalnum()
+
+
+@pytest.mark.offline
+def test_classify_digital_wallet_day_return_ready(tmp_path):
+    """National Rail app / Google Wallet screenshot → ready_to_claim."""
+    layout = tickets_layout(tmp_path / "tickets")
+    layout.ensure()
+    (layout.unclassified / "wallet.png").write_bytes(b"DIGITAL")
+    ocr = FakeOcrEngine({
+        "wallet.png": OcrResult(
+            "Valid for one journey from LONDON TERMINALS to GODALMING "
+            "Date of travel 2026-07-24 Adult Standard Class "
+            "Ticket number SRBYE8PNEF3",
+            92.0,
+        ),
+    })
+    summary = classify_unclassified(
+        layout, ocr, now=datetime(2026, 7, 27, 10, 0, 0)
+    )
+    assert summary.ready == 1
+    assert summary.rejected == 0
+    ready = [p for p in layout.ready_to_claim.iterdir() if p.suffix.lower() in {".png", ".jpg", ".jpeg"}]
+    assert len(ready) == 1
+    assert ready[0].name.startswith("07-24-")

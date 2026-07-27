@@ -47,18 +47,39 @@ class DropHashStore:
         )
 
 
+def hash_file_present(digest: str, roots: list[Path]) -> bool:
+    """True if a dropped file for ``digest`` still exists under any root."""
+    short = digest[:10]
+    needle = f"-{short}"
+    for root in roots:
+        root = Path(root)
+        if not root.is_dir():
+            continue
+        for path in root.rglob("*"):
+            if path.is_file() and needle in path.stem:
+                return True
+    return False
+
+
 def unique_drop_path(
     dest_dir: Path,
     data: bytes,
     original_name: str,
     *,
     store: DropHashStore,
+    presence_roots: list[Path] | None = None,
 ) -> Path | None:
-    """Return a path under ``dest_dir`` for ``data``, or None if duplicate hash."""
+    """Return a path under ``dest_dir`` for ``data``, or None if duplicate hash.
+
+    If the hash was recorded but the file was removed (quarantine / manual
+    delete), rematerialise under ``dest_dir`` unless a matching file still
+    exists under ``presence_roots`` (default: ``dest_dir`` only).
+    """
     digest = content_hash(data)
-    if store.has(digest):
-        return None
     dest_dir = Path(dest_dir)
+    roots = [Path(p) for p in (presence_roots or [dest_dir])]
+    if store.has(digest) and hash_file_present(digest, roots):
+        return None
     dest_dir.mkdir(parents=True, exist_ok=True)
     safe = sanitize_filename(original_name)
     stem = Path(safe).stem
@@ -117,7 +138,13 @@ def ingest_folder_images(
             summary.skipped += 1
             shutil.move(str(src), str(processed_dir / src.name))
             continue
-        path = unique_drop_path(dest_dir, data, src.name, store=store)
+        path = unique_drop_path(
+            dest_dir,
+            data,
+            src.name,
+            store=store,
+            presence_roots=[dest_dir, processed_dir],
+        )
         if path is None:
             summary.duplicates += 1
             shutil.move(str(src), str(processed_dir / src.name))

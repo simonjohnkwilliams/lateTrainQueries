@@ -22,8 +22,13 @@ FALLBACK_MODEL = "qwen2.5vl:7b"
 _MAX_IMAGE_EDGE = 1600
 
 _EXTRACT_PROMPT = (
-    "Extract UK rail ticket fields from this photo. "
+    "Extract UK rail ticket fields from this photo or phone screenshot. "
     "Decide document_type first (sales_voucher / receipt / journey_ticket). "
+    "Digital wallet / Google Wallet / National Rail app screenshots with a QR "
+    "code and Valid From / Valid Until are journey_tickets (not receipts). "
+    "For those, use Valid From as date_of_travel when it is a day ticket "
+    "(Valid From and Valid Until the same day); ticket_kind anytime_day_return "
+    "or anytime_day_single as printed; ticket_number = code under the QR. "
     "If it is a 7-day Travelcard, set ticket_kind=travelcard_7day with start_date AND "
     "valid_until; leave date_of_travel null. "
     "Always extract price and ticket_number when printed on a journey ticket. "
@@ -137,6 +142,15 @@ def normalise_vision_fields(fields: TicketVisionFields) -> TicketVisionFields:
         data["valid_until"] = None
         until = None
     kind = (data.get("ticket_kind") or "").casefold()
+
+# Same-day Valid From / Valid Until (digital wallet day tickets)
+    if (
+        start_dt
+        and until_dt
+        and start_dt.date() == until_dt.date()
+        and not data.get("date_of_travel")
+    ):
+        data["date_of_travel"] = data.get("start_date") or data.get("valid_until")
 
     if (
         start

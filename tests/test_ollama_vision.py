@@ -93,6 +93,43 @@ def test_vision_fields_to_transcript_day_return_and_weekly():
 
 
 @pytest.mark.offline
+def test_normalise_digital_wallet_same_day_sets_date_of_travel():
+    from trainline.adapters.ollama_vision import normalise_vision_fields
+
+    raw = TicketVisionFields.from_dict({
+        "document_type": "journey_ticket",
+        "ticket_kind": "anytime_day_return",
+        "origin": "London Terminals",
+        "destination": "Godalming",
+        "start_date": "2026-07-24",
+        "valid_until": "2026-07-24",
+        "date_of_travel": None,
+        "ticket_number": "SRBYE8PNEF3",
+        "readable": True,
+    })
+    fixed = normalise_vision_fields(raw)
+    assert fixed.date_of_travel == "2026-07-24"
+    assert fixed.ticket_kind == "anytime_day_return"
+    text = vision_fields_to_transcript(fixed)
+    assert is_god_wat_route(text)
+    assert resolve_journey_date(text, "digital.png").date().isoformat() == "2026-07-24"
+    assert "SRBYE8PNEF3" in text or "Ticket number" in text
+
+
+@pytest.mark.offline
+def test_digital_wallet_fixture_exists_and_is_image():
+    path = (
+        Path(__file__).resolve().parent
+        / "fixtures"
+        / "tickets"
+        / "digital"
+        / "national_rail_wallet_lon_god_2026-07-24.png"
+    )
+    assert path.is_file()
+    assert path.stat().st_size > 1000
+
+
+@pytest.mark.offline
 def test_normalise_swaps_inverted_weekly_range():
     from trainline.adapters.ollama_vision import normalise_vision_fields
 

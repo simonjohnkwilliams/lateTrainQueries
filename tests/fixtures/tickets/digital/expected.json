@@ -1,0 +1,12 @@
+{
+  "_comment": "Digital National Rail / Google Wallet screenshots (Epic 8 follow-up).",
+  "accept": {
+    "national_rail_wallet_lon_god_2026-07-24.png": {
+      "journey_date": "2026-07-24",
+      "origin": "London Terminals",
+      "destination": "Godalming",
+      "ticket_kind": "anytime_day_return",
+      "ticket_number": "SRBYE8PNEF3"
+    }
+  }
+}

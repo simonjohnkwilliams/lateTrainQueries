@@ -28,6 +28,13 @@ _REFRESH_SKEW_SECONDS = 60
 _lock = threading.Lock()
 
 
+def token_missing_required_scopes(scopes: list[str] | None) -> bool:
+    """True when stored token scopes omit any entry from ``GMAIL_SCOPES``."""
+    have = {s.strip() for s in (scopes or []) if s}
+    need = set(GMAIL_SCOPES)
+    return not need.issubset(have)
+
+
 @dataclass(frozen=True)
 class GmailConfig:
     client_id: str
