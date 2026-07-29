@@ -111,8 +111,12 @@ and confirm that paid claim is **absent** from Table 2 (it was just marked
 
 ## Pass criteria for Epic 9
 
-- [ ] Offline suite green (A)
-- [ ] Lifecycle file loads + shows the expected row (B)
-- [ ] Live Gmail refresh advances a seeded claim, or warns cleanly when not configured (C)
-- [ ] Dry-run ops email contains a Table 2 section for the seeded claim (D)
+- [x] Offline suite green (A)
+- [x] Lifecycle file loads + shows the expected row (B) — done against the real
+      claims filed 2026-07-27 instead of the fictitious seed; see
+      `epic-9-live-validation-2026-07-29.md`
+- [x] Live Gmail refresh advances a seeded claim, or warns cleanly when not configured (C) —
+      real claims `SWR-1316-710-286` / `SWR-1141-527-492` both advanced to `paid`
+- [x] Dry-run ops email contains a Table 2 section for the seeded claim (D) —
+      real Table 2 rendered both claims as `paid`; see evidence doc above
 - [ ] (Optional, next real Friday) `--weekly-ops --live-submit` produces a `submitted` row; the following Friday omits paid rows already reported (E)

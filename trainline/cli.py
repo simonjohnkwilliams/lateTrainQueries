@@ -767,6 +767,49 @@ def _build_lifecycle_gmail_client(credentials_path: str | None):
     return GmailClient(creds)
 
 
+_CLAIM_MAIL_PROCESSED_LABEL = "trainline-claim-processed"
+
+
+def _ensure_claim_mail_label(client) -> str | None:
+    """Best-effort label id for filing processed claim mail (scope-tolerant)."""
+    ensure_label_id = getattr(client, "ensure_label_id", None)
+    if ensure_label_id is None:
+        return None
+    try:
+        return ensure_label_id(_CLAIM_MAIL_PROCESSED_LABEL)
+    except Exception as exc:  # noqa: BLE001 - best-effort filing
+        if not _is_insufficient_gmail_scope(exc):
+            raise
+        _progress(
+            "WARNING: cannot create/read Gmail labels (need gmail.modify). "
+            "Claim mail will not be filed until you re-auth: "
+            "python -m trainline --gmail-auth"
+        )
+        return None
+
+
+def _file_claim_mail(client, message_id: str, label_id: str | None) -> None:
+    """Label + archive a processed claim-status message (best-effort)."""
+    if label_id is None:
+        return
+    modify_message = getattr(client, "modify_message", None)
+    if modify_message is None:
+        return
+    try:
+        modify_message(
+            message_id,
+            add_label_ids=[label_id],
+            remove_label_ids=["INBOX", "UNREAD"],
+        )
+    except Exception as exc:  # noqa: BLE001 - best-effort filing
+        if not _is_insufficient_gmail_scope(exc):
+            raise
+        _progress(
+            f"WARNING: cannot file claim mail {message_id} (no label id / scopes). "
+            "Re-run: python -m trainline --gmail-auth"
+        )
+
+
 def _refresh_claim_lifecycle(
     *,
     lifecycle_path: Path,
@@ -778,6 +821,8 @@ def _refresh_claim_lifecycle(
     Only ``open_for_table2`` rows are refreshed — reported-paid rows have
     already left Table 2. Gmail/parse failures warn and continue. Never
     raises: returns 0 even on failure so the weekly chain keeps going.
+    Processed claim-status messages are filed (labelled + archived out of
+    inbox/unread) the same way ticket mail is, best-effort.
     """
     from trainline.adapters.claim_lifecycle import LifecycleStore
     from trainline.adapters.gmail.claim_mail import (
@@ -803,6 +848,8 @@ def _refresh_claim_lifecycle(
             )
             return 0
 
+    label_id = _ensure_claim_mail_label(client)
+
     for row in open_rows:
         try:
             query = swr_claim_search_query(row.claim_id)
@@ -820,6 +867,7 @@ def _refresh_claim_lifecycle(
                 if parsed.stage is ClaimMailStage.UNKNOWN:
                     continue
                 store.apply_stage(row.claim_id, parsed.stage.value)
+                _file_claim_mail(client, mid, label_id)
         except Exception as exc:  # noqa: BLE001 - best-effort refresh
             _progress(
                 f"WARNING: lifecycle refresh failed for {row.claim_id}: {exc}"

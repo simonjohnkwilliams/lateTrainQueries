@@ -29,11 +29,19 @@ def _gmail_message(*, mid: str, subject: str, body: str = "") -> dict:
 
 
 class _FakeGmailClient:
-    """Search→get_message stub keyed by claim id."""
+    """Search→get_message stub keyed by claim id, plus label/file support."""
 
-    def __init__(self, messages_by_claim: dict[str, list[dict]]):
+    def __init__(
+        self,
+        messages_by_claim: dict[str, list[dict]],
+        *,
+        label_scope_ok: bool = True,
+    ):
         self._by_claim = messages_by_claim
         self.search_calls: list[str] = []
+        self.label_scope_ok = label_scope_ok
+        self.ensure_label_calls: list[str] = []
+        self.filed_message_ids: list[str] = []
 
     def search_messages(self, query: str, max_results: int = 500) -> list[dict]:
         self.search_calls.append(query)
@@ -48,6 +56,17 @@ class _FakeGmailClient:
                 if m["id"] == message_id:
                     return m
         raise KeyError(message_id)
+
+    def ensure_label_id(self, name: str) -> str:
+        self.ensure_label_calls.append(name)
+        if not self.label_scope_ok:
+            from trainline.adapters.gmail.errors import GmailError
+
+            raise GmailError("insufficient permissions (need gmail.modify)")
+        return "label-trainline-claim-processed"
+
+    def modify_message(self, message_id, *, add_label_ids=None, remove_label_ids=None):
+        self.filed_message_ids.append(message_id)
 
 
 def _seed_store(path: Path, claim_id: str, status: str = "submitted") -> LifecycleStore:
@@ -183,6 +202,83 @@ def test_refresh_search_failure_warns_and_continues(tmp_path, monkeypatch, capsy
     err = capsys.readouterr().err.casefold()
     assert "warning" in err or "refresh failed" in err
     assert LifecycleStore(path).get("SWR-0218-108-579").status == "submitted"
+
+
+@pytest.mark.offline
+def test_refresh_files_processed_claim_mail(tmp_path, monkeypatch):
+    """A message that advances the lifecycle is labelled + archived (best-effort)."""
+    path = tmp_path / "claim-lifecycle.json"
+    _seed_store(path, "SWR-0218-108-579", "submitted")
+    client = _FakeGmailClient(
+        {
+            "SWR-0218-108-579": [
+                _gmail_message(
+                    mid="m1",
+                    subject=(
+                        "South Western Railway Delay Repay - Claim "
+                        "SWR-0218-108-579 - Received"
+                    ),
+                )
+            ]
+        }
+    )
+    cli._refresh_claim_lifecycle(
+        lifecycle_path=path, credentials_path=None, client=client
+    )
+    assert client.ensure_label_calls == [cli._CLAIM_MAIL_PROCESSED_LABEL]
+    assert client.filed_message_ids == ["m1"]
+
+
+@pytest.mark.offline
+def test_refresh_skips_unknown_stage_message_is_not_filed(tmp_path, monkeypatch):
+    """A message that doesn't match a known stage is never filed."""
+    path = tmp_path / "claim-lifecycle.json"
+    _seed_store(path, "SWR-0218-108-579", "submitted")
+    client = _FakeGmailClient(
+        {
+            "SWR-0218-108-579": [
+                _gmail_message(
+                    mid="m1",
+                    subject=(
+                        "South Western Railway Delay Repay - Claim "
+                        "SWR-0218-108-579 - Something Else"
+                    ),
+                )
+            ]
+        }
+    )
+    cli._refresh_claim_lifecycle(
+        lifecycle_path=path, credentials_path=None, client=client
+    )
+    assert client.filed_message_ids == []
+
+
+@pytest.mark.offline
+def test_refresh_insufficient_label_scope_still_advances_lifecycle(tmp_path, monkeypatch, capsys):
+    """Missing gmail.modify scope must not block the lifecycle advancing."""
+    path = tmp_path / "claim-lifecycle.json"
+    _seed_store(path, "SWR-0218-108-579", "submitted")
+    client = _FakeGmailClient(
+        {
+            "SWR-0218-108-579": [
+                _gmail_message(
+                    mid="m1",
+                    subject=(
+                        "South Western Railway Delay Repay - Claim "
+                        "SWR-0218-108-579 - Received"
+                    ),
+                )
+            ]
+        },
+        label_scope_ok=False,
+    )
+    cli._refresh_claim_lifecycle(
+        lifecycle_path=path, credentials_path=None, client=client
+    )
+    assert LifecycleStore(path).get("SWR-0218-108-579").status == "received"
+    assert client.filed_message_ids == []
+    err = capsys.readouterr().err.casefold()
+    assert "cannot create/read gmail labels" in err
 
 
 @pytest.mark.offline
